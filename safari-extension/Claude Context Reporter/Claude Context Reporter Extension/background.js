@@ -5,8 +5,10 @@
 
 // Constants
 const STORAGE_KEY = "reports";
+const SETTINGS_KEY = "settings";
 const MAX_REPORTS = 500; // Prevent unbounded storage growth
 const CONTEXT_MENU_ID = "capture-for-ai";
+const BASE_EXPORT_FOLDER = "ai-agent-reports";
 
 // Valid message actions
 const VALID_ACTIONS = new Set([
@@ -14,7 +16,10 @@ const VALID_ACTIONS = new Set([
   "getReports",
   "deleteReport",
   "clearAllReports",
-  "exportReports"
+  "exportReports",
+  "getProjectMappings",
+  "saveProjectMappings",
+  "getExportFolder"
 ]);
 
 // Create context menu on install
@@ -69,7 +74,10 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     getReports: () => getReports(),
     deleteReport: () => deleteReport(message.id),
     clearAllReports: () => clearAllReports(),
-    exportReports: () => exportReports()
+    exportReports: () => exportReports(),
+    getProjectMappings: () => getProjectMappings(),
+    saveProjectMappings: () => saveProjectMappings(message.mappings),
+    getExportFolder: () => getExportFolder(message.url)
   };
 
   handlers[action]()
@@ -218,6 +226,116 @@ async function exportReports() {
   } catch (error) {
     console.error("Failed to export reports:", error);
     return { success: false, error: error.message };
+  }
+}
+
+// ============ Project Mappings ============
+
+async function getProjectMappings() {
+  try {
+    const { [SETTINGS_KEY]: settings = {} } = await browser.storage.local.get(SETTINGS_KEY);
+    return { success: true, mappings: settings.projectMappings || [] };
+  } catch (error) {
+    console.error("Failed to get project mappings:", error);
+    return { success: false, error: error.message, mappings: [] };
+  }
+}
+
+async function saveProjectMappings(mappings) {
+  try {
+    const { [SETTINGS_KEY]: settings = {} } = await browser.storage.local.get(SETTINGS_KEY);
+    settings.projectMappings = mappings;
+    await browser.storage.local.set({ [SETTINGS_KEY]: settings });
+    return { success: true };
+  } catch (error) {
+    console.error("Failed to save project mappings:", error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Match URL against project mappings
+function matchUrlToProject(url, mappings) {
+  if (!url || mappings.length === 0) return null;
+
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(url);
+  } catch (e) {
+    return null;
+  }
+
+  const urlHost = parsedUrl.host;
+  const urlHostname = parsedUrl.hostname;
+
+  for (const mapping of mappings) {
+    for (const pattern of mapping.patterns) {
+      const trimmedPattern = pattern.trim().toLowerCase();
+      if (!trimmedPattern) continue;
+
+      if (trimmedPattern.startsWith("*.")) {
+        const suffix = trimmedPattern.slice(2);
+        if (urlHostname.toLowerCase() === suffix || urlHostname.toLowerCase().endsWith("." + suffix)) {
+          return mapping;
+        }
+      } else if (trimmedPattern.endsWith(":*")) {
+        const prefix = trimmedPattern.slice(0, -2);
+        if (urlHostname.toLowerCase() === prefix) {
+          return mapping;
+        }
+      } else {
+        if (urlHost.toLowerCase() === trimmedPattern || urlHostname.toLowerCase() === trimmedPattern) {
+          return mapping;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// Sanitize folder name for filesystem
+function sanitizeFolderName(name) {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9.-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 50) || "default";
+}
+
+// Get domain-based folder from URL
+function getDomainFolder(url) {
+  try {
+    const parsedUrl = new URL(url);
+    return sanitizeFolderName(parsedUrl.host);
+  } catch (e) {
+    return "unknown";
+  }
+}
+
+// Get export folder for a URL
+async function getExportFolder(url) {
+  try {
+    const { [SETTINGS_KEY]: settings = {} } = await browser.storage.local.get(SETTINGS_KEY);
+    const mappings = settings.projectMappings || [];
+    const matchedProject = matchUrlToProject(url, mappings);
+
+    if (matchedProject) {
+      return {
+        success: true,
+        folder: BASE_EXPORT_FOLDER + "/" + sanitizeFolderName(matchedProject.folder),
+        projectName: matchedProject.name
+      };
+    }
+
+    const domainFolder = getDomainFolder(url);
+    return {
+      success: true,
+      folder: BASE_EXPORT_FOLDER + "/" + domainFolder,
+      projectName: null
+    };
+  } catch (error) {
+    console.error("Failed to get export folder:", error);
+    return { success: false, error: error.message, folder: BASE_EXPORT_FOLDER, projectName: null };
   }
 }
 

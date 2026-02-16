@@ -127,6 +127,23 @@
         justify-content: space-between;
         align-items: center;
         margin-bottom: 8px;
+        gap: 8px;
+      }
+      .header-buttons {
+        display: flex;
+        gap: 6px;
+      }
+      .export-all-button {
+        background: #0d9488;
+        color: white;
+        border: none;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 10px;
+        cursor: pointer;
+      }
+      .export-all-button:hover {
+        background: #0f766e;
       }
       .clear-all-button {
         background: transparent;
@@ -139,6 +156,16 @@
       }
       .clear-all-button:hover {
         background: #fef2f2;
+      }
+      .drag-hint {
+        background: #eff6ff;
+        border: 1px dashed #4285f4;
+        border-radius: 4px;
+        padding: 6px 8px;
+        margin-bottom: 8px;
+        text-align: center;
+        font-size: 10px;
+        color: #4285f4;
       }
       .empty-state {
         color: #999;
@@ -154,6 +181,20 @@
         border: 1px solid #ddd;
         border-radius: 4px;
         margin-bottom: 6px;
+        cursor: grab;
+        transition: all 0.15s ease;
+      }
+      .report-item:hover {
+        border-color: #bbb;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+      }
+      .report-item:active {
+        cursor: grabbing;
+      }
+      .report-item.dragging {
+        opacity: 0.5;
+        border-color: #4285f4;
+        background: #eff6ff;
       }
       .report-summary {
         display: flex;
@@ -186,10 +227,20 @@
         border-radius: 3px;
         cursor: pointer;
       }
+      .export-btn {
+        background: #dcfce7;
+        color: #16a34a;
+        border: none;
+        font-weight: bold;
+      }
+      .export-btn:hover {
+        background: #bbf7d0;
+      }
       .copy-btn {
         background: #4285f4;
         color: white;
         border: none;
+        flex: 1;
       }
       .copy-btn:hover {
         background: #3367d6;
@@ -239,12 +290,171 @@
       .dialog-button.danger:hover {
         background: #b91c1c;
       }
+      .folder-hint {
+        background: #f0fdf4;
+        border: 1px solid #bbf7d0;
+        border-radius: 4px;
+        padding: 6px 8px;
+        margin-top: 8px;
+        font-size: 10px;
+        color: #16a34a;
+        text-align: center;
+      }
+      .settings-description {
+        font-size: 11px;
+        color: #666;
+        margin-bottom: 12px;
+        line-height: 1.4;
+      }
+      .settings-hint {
+        font-size: 11px;
+        color: #666;
+        line-height: 1.5;
+      }
+      .settings-hint code {
+        background: #e5e5e5;
+        padding: 1px 4px;
+        border-radius: 3px;
+        font-size: 10px;
+      }
+      .mappings-list {
+        margin-bottom: 12px;
+      }
+      .mapping-item {
+        display: flex;
+        flex-direction: column;
+        background: #fff;
+        padding: 8px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        margin-bottom: 6px;
+      }
+      .mapping-item:hover {
+        border-color: #bbb;
+      }
+      .mapping-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 4px;
+      }
+      .mapping-name {
+        font-weight: 600;
+        font-size: 12px;
+        color: #333;
+      }
+      .mapping-actions {
+        display: flex;
+        gap: 4px;
+      }
+      .mapping-edit-btn, .mapping-delete-btn {
+        padding: 2px 6px;
+        font-size: 10px;
+        border-radius: 3px;
+        cursor: pointer;
+        border: none;
+      }
+      .mapping-edit-btn {
+        background: #e5e5e5;
+        color: #333;
+      }
+      .mapping-edit-btn:hover {
+        background: #ddd;
+      }
+      .mapping-delete-btn {
+        background: transparent;
+        color: #dc2626;
+        border: 1px solid #dc2626;
+      }
+      .mapping-delete-btn:hover {
+        background: #fef2f2;
+      }
+      .mapping-patterns {
+        font-size: 10px;
+        color: #666;
+        font-family: 'SF Mono', Monaco, Consolas, monospace;
+      }
+      .mapping-folder {
+        font-size: 10px;
+        color: #16a34a;
+        margin-top: 2px;
+      }
+      .add-mapping-button {
+        width: 100%;
+        padding: 8px;
+        background: #f5f5f5;
+        border: 1px dashed #ccc;
+        border-radius: 4px;
+        font-size: 12px;
+        color: #666;
+        cursor: pointer;
+      }
+      .add-mapping-button:hover {
+        background: #eff6ff;
+        border-color: #4285f4;
+        color: #4285f4;
+      }
+      #mapping-dialog {
+        width: 300px;
+        padding: 16px;
+      }
+      .dialog-title {
+        font-size: 14px;
+        font-weight: 600;
+        margin-bottom: 16px;
+        color: #333;
+      }
+      .form-group {
+        margin-bottom: 12px;
+      }
+      .form-group label {
+        display: block;
+        font-size: 11px;
+        font-weight: 600;
+        color: #666;
+        margin-bottom: 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .form-group input, .form-group textarea {
+        width: 100%;
+        padding: 8px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 12px;
+        font-family: inherit;
+      }
+      .form-group input:focus, .form-group textarea:focus {
+        outline: none;
+        border-color: #4285f4;
+        box-shadow: 0 0 0 2px rgba(66,133,244,0.2);
+      }
+      .form-group textarea {
+        resize: vertical;
+        min-height: 60px;
+        font-family: 'SF Mono', Monaco, Consolas, monospace;
+        font-size: 11px;
+      }
+      .form-hint {
+        display: block;
+        font-size: 10px;
+        color: #999;
+        margin-top: 4px;
+      }
+      .dialog-button.primary {
+        background: #4285f4;
+        color: white;
+      }
+      .dialog-button.primary:hover {
+        background: #3367d6;
+      }
     </style>
   </head>
   <body>
     <div class="tabs">
       <button class="tab-btn active" data-view="capture">Capture</button>
       <button class="tab-btn" data-view="reports">Reports</button>
+      <button class="tab-btn" data-view="settings">Settings</button>
     </div>
 
     <div id="capture-view" class="view">
@@ -277,19 +487,78 @@
       <button id="save-btn" class="save-button" disabled>Save Report</button>
       <span id="save-feedback" class="save-feedback"></span>
     </div>
+
+    <div class="folder-hint">
+      Reports export to ~/Downloads/ai-agent-reports/
+    </div>
     </div>
 
     <div id="reports-view" class="view" hidden>
       <div class="section">
         <div class="reports-header">
           <span class="label">Saved Reports</span>
-          <button id="clear-all-btn" class="clear-all-button">Clear All</button>
+          <div class="header-buttons">
+            <button id="export-all-btn" class="export-all-button">Export All</button>
+            <button id="clear-all-btn" class="clear-all-button">Clear All</button>
+          </div>
+        </div>
+        <div class="drag-hint">
+          💡 Drag reports to your IDE or terminal
         </div>
         <div id="report-list" class="report-list">
           <p class="empty-state">No reports saved yet.</p>
         </div>
       </div>
     </div>
+
+    <div id="settings-view" class="view" hidden>
+      <div class="section">
+        <span class="label">Project Mappings</span>
+        <p class="settings-description">Map URL patterns to project folders. Reports will be saved to ~/Downloads/ai-agent-reports/{folder}/</p>
+
+        <div id="mappings-list" class="mappings-list">
+          <p class="empty-state">No project mappings configured.</p>
+        </div>
+
+        <button id="add-mapping-btn" class="add-mapping-button">+ Add Project Mapping</button>
+      </div>
+
+      <div class="section">
+        <span class="label">Default Behavior</span>
+        <p class="settings-hint">When no project matches, reports are organized by domain:<br>
+        <code>ai-agent-reports/localhost-3000/</code><br>
+        <code>ai-agent-reports/github-com/</code></p>
+      </div>
+    </div>
+
+    <dialog id="mapping-dialog">
+      <form method="dialog" id="mapping-form">
+        <h3 class="dialog-title">Project Mapping</h3>
+        <input type="hidden" id="mapping-id">
+
+        <div class="form-group">
+          <label for="mapping-name">Project Name</label>
+          <input type="text" id="mapping-name" placeholder="My React App" required>
+        </div>
+
+        <div class="form-group">
+          <label for="mapping-patterns">URL Patterns (one per line)</label>
+          <textarea id="mapping-patterns" rows="3" placeholder="localhost:3000&#10;*.myapp.com&#10;staging.myapp.com" required></textarea>
+          <span class="form-hint">Supports: exact match, wildcards (*.example.com), port wildcards (localhost:*)</span>
+        </div>
+
+        <div class="form-group">
+          <label for="mapping-folder">Folder Name</label>
+          <input type="text" id="mapping-folder" placeholder="my-react-app" required>
+          <span class="form-hint">Reports will export to ai-agent-reports/{folder}/</span>
+        </div>
+
+        <div class="dialog-actions">
+          <button type="button" value="cancel" class="dialog-button" id="mapping-cancel">Cancel</button>
+          <button type="submit" class="dialog-button primary">Save</button>
+        </div>
+      </form>
+    </dialog>
 
     <dialog id="clear-confirm-dialog">
       <form method="dialog">

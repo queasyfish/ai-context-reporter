@@ -1,15 +1,23 @@
 // Claude Context Reporter - Popup Script
-// Manages the reports list, copy, delete, and export functionality
+// Manages the reports list, copy, delete, export, and drag-drop functionality
 
 "use strict";
 
+// Constants
+const BASE_EXPORT_FOLDER = "ai-agent-reports";
+
 document.addEventListener("DOMContentLoaded", () => {
-  // DOM references with null checks
+  // DOM references
   const reportsList = document.getElementById("reports-list");
   const emptyState = document.getElementById("empty-state");
-  const exportBtn = document.getElementById("export-btn");
+  const exportAllBtn = document.getElementById("export-all-btn");
   const clearBtn = document.getElementById("clear-btn");
   const template = document.getElementById("report-template");
+  const footer = document.getElementById("footer");
+  const dragHint = document.getElementById("drag-hint");
+  const reportsView = document.getElementById("reports-view");
+  const settingsView = document.getElementById("settings-view");
+  const reportsActions = document.getElementById("reports-actions");
 
   // Verify required elements exist
   if (!reportsList || !emptyState || !template) {
@@ -17,12 +25,46 @@ document.addEventListener("DOMContentLoaded", () => {
     return;
   }
 
+  // Current reports cache for drag operations
+  let reportsCache = [];
+  // Project mappings cache
+  let mappingsCache = [];
+
   // Load reports on popup open
   loadReports();
 
+  // Tab switching
+  document.querySelectorAll(".header-tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+      const viewName = tab.dataset.view;
+      switchView(viewName);
+    });
+  });
+
+  function switchView(viewName) {
+    // Update tab styles
+    document.querySelectorAll(".header-tab").forEach(t => {
+      t.classList.toggle("active", t.dataset.view === viewName);
+    });
+
+    // Show/hide views
+    if (reportsView) reportsView.classList.toggle("hidden", viewName !== "reports");
+    if (settingsView) settingsView.classList.toggle("hidden", viewName !== "settings");
+
+    // Show/hide reports-specific actions
+    if (reportsActions) reportsActions.classList.toggle("hidden", viewName !== "reports");
+
+    // Load content for the view
+    if (viewName === "reports") {
+      loadReports();
+    } else if (viewName === "settings") {
+      loadMappings();
+    }
+  }
+
   // Export all reports
-  if (exportBtn) {
-    exportBtn.addEventListener("click", handleExport);
+  if (exportAllBtn) {
+    exportAllBtn.addEventListener("click", handleExportAll);
   }
 
   // Clear all reports
@@ -30,20 +72,28 @@ document.addEventListener("DOMContentLoaded", () => {
     clearBtn.addEventListener("click", handleClearAll);
   }
 
-  async function handleExport() {
-    try {
-      exportBtn.disabled = true;
-      const response = await browser.runtime.sendMessage({ action: "exportReports" });
+  async function handleExportAll() {
+    if (reportsCache.length === 0) return;
 
-      if (response?.success && response.data) {
-        downloadJSON(response.data);
-      } else {
-        console.error("Export failed:", response?.error);
+    try {
+      exportAllBtn.disabled = true;
+      let exportedCount = 0;
+
+      for (const report of reportsCache) {
+        try {
+          await exportReportToFile(report);
+          exportedCount++;
+        } catch (err) {
+          console.warn("Failed to export report:", err);
+        }
       }
+
+      showToast(`Exported ${exportedCount} report${exportedCount !== 1 ? 's' : ''} to Downloads/${EXPORT_FOLDER}/`);
     } catch (error) {
-      console.error("Export error:", error);
+      console.error("Export all error:", error);
+      showToast("Export failed", true);
     } finally {
-      exportBtn.disabled = false;
+      exportAllBtn.disabled = false;
     }
   }
 
@@ -68,6 +118,7 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const response = await browser.runtime.sendMessage({ action: "getReports" });
       const reports = Array.isArray(response?.reports) ? response.reports : [];
+      reportsCache = reports;
 
       // Clear existing content
       reportsList.innerHTML = "";
@@ -75,18 +126,22 @@ document.addEventListener("DOMContentLoaded", () => {
       if (reports.length === 0) {
         emptyState.classList.remove("hidden");
         reportsList.classList.add("hidden");
+        if (footer) footer.classList.add("hidden");
+        if (dragHint) dragHint.classList.add("hidden");
         return;
       }
 
       emptyState.classList.add("hidden");
       reportsList.classList.remove("hidden");
+      if (footer) footer.classList.remove("hidden");
+      if (dragHint) dragHint.classList.remove("hidden");
 
       // Use document fragment for better performance
       const fragment = document.createDocumentFragment();
 
-      for (const report of reports) {
+      for (let i = 0; i < reports.length; i++) {
         try {
-          const item = createReportItem(report);
+          const item = createReportItem(reports[i], i);
           if (item) {
             fragment.appendChild(item);
           }
@@ -104,7 +159,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // Create report list item
-  function createReportItem(report) {
+  function createReportItem(report, index) {
     if (!report || !report.id) {
       console.warn("Invalid report data");
       return null;
@@ -114,6 +169,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const item = clone.querySelector(".report-item");
 
     if (!item) return null;
+
+    // Store report index for drag operations
+    item.dataset.reportIndex = index;
 
     // Element info
     const elementInfo = item.querySelector(".report-element");
@@ -133,7 +191,6 @@ document.addEventListener("DOMContentLoaded", () => {
     if (comment) {
       const commentText = report.comment?.trim() || "";
       comment.textContent = commentText;
-      // Hide if empty
       if (!commentText) {
         comment.style.display = "none";
       }
@@ -146,19 +203,177 @@ document.addEventListener("DOMContentLoaded", () => {
       url.title = report.pageUrl || "";
     }
 
+    // Export button
+    const exportBtn = item.querySelector(".btn-export");
+    if (exportBtn) {
+      exportBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        handleExportSingle(report, exportBtn);
+      });
+    }
+
     // Copy button
     const copyBtn = item.querySelector(".btn-copy");
     if (copyBtn) {
-      copyBtn.addEventListener("click", () => copyAsMarkdown(report, copyBtn));
+      copyBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        copyAsMarkdown(report, copyBtn);
+      });
     }
 
     // Delete button
     const deleteBtn = item.querySelector(".btn-delete");
     if (deleteBtn) {
-      deleteBtn.addEventListener("click", () => handleDelete(report.id));
+      deleteBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        handleDelete(report.id);
+      });
     }
 
+    // Drag and drop handlers
+    item.addEventListener("dragstart", (e) => handleDragStart(e, report));
+    item.addEventListener("dragend", handleDragEnd);
+
     return item;
+  }
+
+  // Handle drag start
+  function handleDragStart(e, report) {
+    const item = e.currentTarget;
+    item.classList.add("dragging");
+
+    const markdown = generateMarkdown(report);
+
+    // Set multiple data types for compatibility
+    e.dataTransfer.setData("text/plain", markdown);
+    e.dataTransfer.setData("text/markdown", markdown);
+
+    // Set drag effect
+    e.dataTransfer.effectAllowed = "copy";
+  }
+
+  // Handle drag end
+  function handleDragEnd(e) {
+    e.currentTarget.classList.remove("dragging");
+  }
+
+  // Export single report
+  async function handleExportSingle(report, button) {
+    try {
+      button.disabled = true;
+      const exportInfo = await exportReportToFile(report);
+
+      button.classList.add("exported");
+      const projectInfo = exportInfo.projectName ? ` (${exportInfo.projectName})` : "";
+      showToast(`Exported to ~/Downloads/${exportInfo.folder}/${projectInfo}`);
+      setTimeout(() => {
+        button.classList.remove("exported");
+        button.disabled = false;
+      }, 1500);
+    } catch (error) {
+      console.error("Export error:", error);
+      button.disabled = false;
+      showToast("Export failed", true);
+    }
+  }
+
+  // Get export folder for a URL
+  async function getExportFolderForUrl(url) {
+    try {
+      const response = await browser.runtime.sendMessage({ action: "getExportFolder", url });
+      if (response?.success) {
+        return { folder: response.folder, projectName: response.projectName };
+      }
+    } catch (err) {
+      console.warn("Failed to get export folder:", err);
+    }
+    // Fallback to domain-based folder
+    return { folder: getDomainFolder(url), projectName: null };
+  }
+
+  // Get domain-based folder from URL
+  function getDomainFolder(url) {
+    try {
+      const parsedUrl = new URL(url);
+      const folder = parsedUrl.host
+        .toLowerCase()
+        .replace(/[^a-z0-9.-]/g, "-")
+        .replace(/-+/g, "-")
+        .slice(0, 50);
+      return `${BASE_EXPORT_FOLDER}/${folder || "unknown"}`;
+    } catch {
+      return `${BASE_EXPORT_FOLDER}/unknown`;
+    }
+  }
+
+  // Export report to file in ai-agent-reports folder
+  async function exportReportToFile(report) {
+    const exportInfo = await getExportFolderForUrl(report.pageUrl);
+    const markdown = generateMarkdown(report, exportInfo.projectName);
+    const filename = generateFilename(report);
+    const filepath = `${exportInfo.folder}/${filename}`;
+
+    // Create blob URL
+    const blob = new Blob([markdown], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+
+    try {
+      // Use downloads API to save to specific folder
+      await browser.downloads.download({
+        url: url,
+        filename: filepath,
+        saveAs: false,
+        conflictAction: "uniquify"
+      });
+      return exportInfo;
+    } finally {
+      // Clean up blob URL
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+  }
+
+  // Generate smart filename from report
+  function generateFilename(report) {
+    const parts = [];
+
+    // Date prefix for sorting
+    const date = report.timestamp
+      ? new Date(report.timestamp).toISOString().slice(0, 10)
+      : new Date().toISOString().slice(0, 10);
+    parts.push(date);
+
+    // Time for uniqueness
+    const time = report.timestamp
+      ? new Date(report.timestamp).toISOString().slice(11, 19).replace(/:/g, "")
+      : Date.now().toString().slice(-6);
+    parts.push(time);
+
+    // Hostname from URL
+    try {
+      const hostname = new URL(report.pageUrl).hostname
+        .replace(/^www\./, "")
+        .replace(/[^a-z0-9]/gi, "-")
+        .slice(0, 30);
+      parts.push(hostname);
+    } catch {
+      parts.push("unknown");
+    }
+
+    // Element identifier
+    const element = report.tagName || "element";
+    const id = report.id ? `-${sanitizeForFilename(report.id).slice(0, 20)}` : "";
+    parts.push(`${element}${id}`);
+
+    return parts.join("-") + ".md";
+  }
+
+  // Sanitize string for filename
+  function sanitizeForFilename(str) {
+    return str
+      .toLowerCase()
+      .replace(/[^a-z0-9]/gi, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
   }
 
   async function handleDelete(id) {
@@ -252,23 +467,29 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // Generate Markdown report
-  function generateMarkdown(report) {
+  function generateMarkdown(report, projectName = null) {
     const lines = [
-      "## Element Context Report",
-      "",
-      `**Page:** ${escapeMarkdown(report.pageTitle || "Untitled")}`,
-      `**URL:** ${report.pageUrl || ""}`,
-      `**Captured:** ${formatTimestamp(report.timestamp)}`,
+      "# Element Context Report",
       ""
     ];
 
+    if (projectName) {
+      lines.push(`**Project:** ${escapeMarkdown(projectName)}`);
+    }
+    lines.push(`**Page:** ${escapeMarkdown(report.pageTitle || "Untitled")}`);
+    lines.push(`**URL:** ${report.pageUrl || ""}`);
+    lines.push(`**Captured:** ${formatTimestamp(report.timestamp)}`);
+    lines.push("");
+
     if (report.comment?.trim()) {
-      lines.push("### Comment");
+      lines.push("## Comment");
+      lines.push("");
       lines.push(report.comment.trim());
       lines.push("");
     }
 
-    lines.push("### Element");
+    lines.push("## Element");
+    lines.push("");
     lines.push(`- **Tag:** \`<${report.tagName || "unknown"}>\``);
     if (report.id) lines.push(`- **ID:** \`${report.id}\``);
     if (report.className) lines.push(`- **Class:** \`${report.className}\``);
@@ -277,15 +498,17 @@ document.addEventListener("DOMContentLoaded", () => {
     lines.push("");
 
     if (report.textContent?.trim()) {
-      lines.push("### Text Content");
+      lines.push("## Text Content");
+      lines.push("");
       lines.push("```");
-      lines.push(report.textContent.trim().substring(0, 300));
+      lines.push(report.textContent.trim().substring(0, 500));
       lines.push("```");
       lines.push("");
     }
 
     if (report.attributes && Object.keys(report.attributes).length > 0) {
-      lines.push("### Attributes");
+      lines.push("## Attributes");
+      lines.push("");
       for (const [key, value] of Object.entries(report.attributes)) {
         lines.push(`- \`${key}\`: ${escapeMarkdown(String(value))}`);
       }
@@ -293,10 +516,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (report.computedStyles && Object.keys(report.computedStyles).length > 0) {
-      lines.push("### Computed Styles");
+      lines.push("## Computed Styles");
+      lines.push("");
       lines.push("```css");
       for (const [key, value] of Object.entries(report.computedStyles)) {
-        // Key is already in kebab-case from content.js
         lines.push(`${key}: ${value};`);
       }
       lines.push("```");
@@ -305,9 +528,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (report.boundingRect) {
       const r = report.boundingRect;
-      lines.push("### Bounding Box");
-      lines.push(`- Position: (${r.left ?? 0}, ${r.top ?? 0})`);
-      lines.push(`- Size: ${r.width ?? 0}×${r.height ?? 0}px`);
+      lines.push("## Bounding Box");
+      lines.push("");
+      lines.push(`- **Position:** (${r.left ?? 0}, ${r.top ?? 0})`);
+      lines.push(`- **Size:** ${r.width ?? 0} × ${r.height ?? 0}px`);
       lines.push("");
     }
 
@@ -330,20 +554,194 @@ document.addEventListener("DOMContentLoaded", () => {
     return str.replace(/[*_`\[\]]/g, "\\$&");
   }
 
-  // Download JSON file
-  function downloadJSON(data) {
-    try {
-      const blob = new Blob([data], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `context-reports-${new Date().toISOString().slice(0, 10)}.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error("Download failed:", error);
+  // Show toast notification
+  function showToast(message, isError = false) {
+    // Remove existing toasts
+    document.querySelectorAll(".export-toast").forEach(t => t.remove());
+
+    const toast = document.createElement("div");
+    toast.className = "export-toast";
+    if (isError) {
+      toast.style.background = "#dc2626";
     }
+    toast.textContent = message;
+    document.body.appendChild(toast);
+
+    setTimeout(() => {
+      toast.style.opacity = "0";
+      toast.style.transform = "translateY(10px)";
+      setTimeout(() => toast.remove(), 200);
+    }, 2500);
+  }
+
+  // ============ Settings Management ============
+
+  // Load project mappings
+  async function loadMappings() {
+    try {
+      const response = await browser.runtime.sendMessage({ action: "getProjectMappings" });
+      const mappings = Array.isArray(response?.mappings) ? response.mappings : [];
+      mappingsCache = mappings;
+      renderMappingsList(mappings);
+    } catch (error) {
+      console.error("Failed to load mappings:", error);
+      renderMappingsList([]);
+    }
+  }
+
+  // Render mappings list
+  function renderMappingsList(mappings) {
+    const container = document.getElementById("mappings-list");
+    if (!container) return;
+
+    if (mappings.length === 0) {
+      container.innerHTML = '<p class="empty-state-small">No project mappings configured.</p>';
+      return;
+    }
+
+    container.innerHTML = mappings.map(mapping => {
+      const patternsDisplay = mapping.patterns.slice(0, 3).join(", ");
+      const moreCount = mapping.patterns.length > 3 ? ` +${mapping.patterns.length - 3} more` : "";
+      return `
+        <div class="mapping-item" data-id="${escapeHtml(mapping.id)}">
+          <div class="mapping-header">
+            <span class="mapping-name">${escapeHtml(mapping.name)}</span>
+            <div class="mapping-actions">
+              <button class="mapping-edit-btn" data-id="${escapeHtml(mapping.id)}">Edit</button>
+              <button class="mapping-delete-btn" data-id="${escapeHtml(mapping.id)}">Delete</button>
+            </div>
+          </div>
+          <span class="mapping-patterns">${escapeHtml(patternsDisplay)}${moreCount}</span>
+          <span class="mapping-folder">→ ai-agent-reports/${escapeHtml(mapping.folder)}/</span>
+        </div>
+      `;
+    }).join("");
+
+    // Add event listeners for edit/delete buttons
+    container.querySelectorAll(".mapping-edit-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        const mapping = mappingsCache.find(m => m.id === btn.dataset.id);
+        if (mapping) openMappingDialog(mapping);
+      });
+    });
+
+    container.querySelectorAll(".mapping-delete-btn").forEach(btn => {
+      btn.addEventListener("click", () => handleDeleteMapping(btn.dataset.id));
+    });
+  }
+
+  // Escape HTML for safe rendering
+  function escapeHtml(str) {
+    if (!str) return "";
+    const div = document.createElement("div");
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  // Open mapping dialog
+  function openMappingDialog(mapping = null) {
+    const dialog = document.getElementById("mapping-dialog");
+    const form = document.getElementById("mapping-form");
+    const idInput = document.getElementById("mapping-id");
+    const nameInput = document.getElementById("mapping-name");
+    const patternsInput = document.getElementById("mapping-patterns");
+    const folderInput = document.getElementById("mapping-folder");
+
+    if (!dialog || !form) return;
+
+    if (mapping) {
+      idInput.value = mapping.id;
+      nameInput.value = mapping.name;
+      patternsInput.value = mapping.patterns.join("\n");
+      folderInput.value = mapping.folder;
+    } else {
+      form.reset();
+      idInput.value = "";
+    }
+
+    dialog.showModal();
+  }
+
+  // Handle mapping form submit
+  async function handleMappingSubmit(e) {
+    e.preventDefault();
+
+    const idInput = document.getElementById("mapping-id");
+    const nameInput = document.getElementById("mapping-name");
+    const patternsInput = document.getElementById("mapping-patterns");
+    const folderInput = document.getElementById("mapping-folder");
+
+    const id = idInput.value;
+    const name = nameInput.value.trim();
+    const patterns = patternsInput.value.split("\n").map(p => p.trim()).filter(p => p);
+    const folder = folderInput.value.trim().toLowerCase().replace(/[^a-z0-9.-]/g, "-").replace(/-+/g, "-");
+
+    if (!name || patterns.length === 0 || !folder) {
+      showToast("Please fill all fields", true);
+      return;
+    }
+
+    try {
+      // Get current mappings
+      const response = await browser.runtime.sendMessage({ action: "getProjectMappings" });
+      let mappings = Array.isArray(response?.mappings) ? response.mappings : [];
+
+      if (id) {
+        // Update existing
+        const index = mappings.findIndex(m => m.id === id);
+        if (index !== -1) {
+          mappings[index] = { id, name, patterns, folder };
+        }
+      } else {
+        // Add new
+        mappings.push({
+          id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          name,
+          patterns,
+          folder
+        });
+      }
+
+      await browser.runtime.sendMessage({ action: "saveProjectMappings", mappings });
+      document.getElementById("mapping-dialog").close();
+      await loadMappings();
+      showToast("Project mapping saved");
+    } catch (error) {
+      console.error("Failed to save mapping:", error);
+      showToast("Failed to save mapping", true);
+    }
+  }
+
+  // Handle delete mapping
+  async function handleDeleteMapping(mappingId) {
+    try {
+      const response = await browser.runtime.sendMessage({ action: "getProjectMappings" });
+      let mappings = Array.isArray(response?.mappings) ? response.mappings : [];
+      mappings = mappings.filter(m => m.id !== mappingId);
+      await browser.runtime.sendMessage({ action: "saveProjectMappings", mappings });
+      await loadMappings();
+      showToast("Project mapping deleted");
+    } catch (error) {
+      console.error("Failed to delete mapping:", error);
+      showToast("Failed to delete mapping", true);
+    }
+  }
+
+  // Settings event listeners
+  const addMappingBtn = document.getElementById("add-mapping-btn");
+  if (addMappingBtn) {
+    addMappingBtn.addEventListener("click", () => openMappingDialog());
+  }
+
+  const mappingForm = document.getElementById("mapping-form");
+  if (mappingForm) {
+    mappingForm.addEventListener("submit", handleMappingSubmit);
+  }
+
+  const mappingCancel = document.getElementById("mapping-cancel");
+  if (mappingCancel) {
+    mappingCancel.addEventListener("click", () => {
+      document.getElementById("mapping-dialog").close();
+    });
   }
 });

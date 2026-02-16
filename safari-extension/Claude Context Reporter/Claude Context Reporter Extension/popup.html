@@ -9,9 +9,12 @@
 <body>
   <div class="popup">
     <header class="header">
-      <h1 class="title">Context Reports</h1>
-      <div class="header-actions">
-        <button id="export-btn" class="icon-btn" title="Export all as JSON">
+      <div class="header-tabs">
+        <button class="header-tab active" data-view="reports">Reports</button>
+        <button class="header-tab" data-view="settings">Settings</button>
+      </div>
+      <div class="header-actions" id="reports-actions">
+        <button id="export-all-btn" class="icon-btn" title="Export all to ai-agent-reports folder">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
             <path d="M8 10V2M8 10L5 7M8 10L11 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
             <path d="M2 12V13C2 13.5523 2.44772 14 3 14H13C13.5523 14 14 13.5523 14 13V12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
@@ -26,18 +29,80 @@
     </header>
 
     <main class="content">
-      <div id="empty-state" class="empty-state">
-        <div class="empty-icon">📋</div>
-        <p>No reports yet</p>
-        <span class="empty-hint">Right-click any element and select "Capture for AI Context"</span>
+      <!-- Reports View -->
+      <div id="reports-view" class="view">
+        <div id="empty-state" class="empty-state">
+          <div class="empty-icon">📋</div>
+          <p>No reports yet</p>
+          <span class="empty-hint">Right-click any element and select "Capture for AI Context"</span>
+        </div>
+
+        <div id="drag-hint" class="drag-hint hidden">
+          <span>Drag reports to your IDE, Finder, or terminal</span>
+        </div>
+
+        <ul id="reports-list" class="reports-list"></ul>
       </div>
 
-      <ul id="reports-list" class="reports-list"></ul>
+      <!-- Settings View -->
+      <div id="settings-view" class="view hidden">
+        <div class="settings-section">
+          <h2 class="settings-title">Project Mappings</h2>
+          <p class="settings-description">Map URL patterns to project folders. Reports will be saved to ~/Downloads/ai-agent-reports/{folder}/</p>
+
+          <div id="mappings-list" class="mappings-list">
+            <p class="empty-state-small">No project mappings configured.</p>
+          </div>
+
+          <button id="add-mapping-btn" class="add-mapping-btn">+ Add Project Mapping</button>
+        </div>
+
+        <div class="settings-section">
+          <h2 class="settings-title">Default Behavior</h2>
+          <p class="settings-hint">When no project matches, reports are organized by domain:</p>
+          <code class="settings-code">ai-agent-reports/localhost-3000/</code>
+          <code class="settings-code">ai-agent-reports/github-com/</code>
+        </div>
+      </div>
     </main>
+
+    <footer class="footer hidden" id="footer">
+      <span class="footer-hint">💡 Drag cards or export to ~/Downloads/ai-agent-reports/</span>
+    </footer>
   </div>
 
+  <!-- Mapping Dialog -->
+  <dialog id="mapping-dialog">
+    <form method="dialog" id="mapping-form">
+      <h3 class="dialog-title">Project Mapping</h3>
+      <input type="hidden" id="mapping-id">
+
+      <div class="form-group">
+        <label for="mapping-name">Project Name</label>
+        <input type="text" id="mapping-name" placeholder="My React App" required>
+      </div>
+
+      <div class="form-group">
+        <label for="mapping-patterns">URL Patterns (one per line)</label>
+        <textarea id="mapping-patterns" rows="3" placeholder="localhost:3000&#10;*.myapp.com&#10;staging.myapp.com" required></textarea>
+        <span class="form-hint">Supports: exact match, wildcards (*.example.com), port wildcards (localhost:*)</span>
+      </div>
+
+      <div class="form-group">
+        <label for="mapping-folder">Folder Name</label>
+        <input type="text" id="mapping-folder" placeholder="my-react-app" required>
+        <span class="form-hint">Reports will export to ai-agent-reports/{folder}/</span>
+      </div>
+
+      <div class="dialog-buttons">
+        <button type="button" class="btn-cancel" id="mapping-cancel">Cancel</button>
+        <button type="submit" class="btn-save">Save</button>
+      </div>
+    </form>
+  </dialog>
+
   <template id="report-template">
-    <li class="report-item">
+    <li class="report-item" draggable="true">
       <div class="report-header">
         <span class="report-element"></span>
         <span class="report-time"></span>
@@ -45,7 +110,13 @@
       <p class="report-comment"></p>
       <div class="report-url"></div>
       <div class="report-actions">
-        <button class="btn btn-copy">Copy Markdown</button>
+        <button class="btn btn-export" title="Export to ai-agent-reports folder">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+            <path d="M8 10V2M8 10L5 7M8 10L11 7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M2 12V13C2 13.5523 2.44772 14 3 14H13C13.5523 14 14 13.5523 14 13V12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <button class="btn btn-copy">Copy</button>
         <button class="btn btn-delete">Delete</button>
       </div>
     </li>

@@ -3,7 +3,7 @@
   "name": "Claude Context Reporter",
   "version": "1.0.0",
   "description": "Capture element context for AI assistants",
-  "permissions": ["storage", "contextMenus", "activeTab"],
+  "permissions": ["storage", "contextMenus", "activeTab", "downloads"],
   "background": {
     "service_worker": "background.js"
   },
