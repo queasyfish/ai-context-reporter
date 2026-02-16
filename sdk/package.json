@@ -1,0 +1,74 @@
+{
+  "name": "ai-context-sdk",
+  "version": "0.1.0",
+  "description": "SDK for providing rich context to AI coding agents via the AI Context Reporter browser extension",
+  "main": "dist/ai-context-sdk.js",
+  "module": "dist/ai-context-sdk.esm.js",
+  "types": "dist/ai-context-sdk.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/ai-context-sdk.esm.js",
+      "require": "./dist/ai-context-sdk.js",
+      "types": "./dist/ai-context-sdk.d.ts"
+    },
+    "./react": {
+      "import": "./dist/react.esm.js",
+      "require": "./dist/react.js",
+      "types": "./dist/react.d.ts"
+    },
+    "./vue": {
+      "import": "./dist/vue.esm.js",
+      "require": "./dist/vue.js",
+      "types": "./dist/vue.d.ts"
+    },
+    "./vite": {
+      "import": "./dist/vite-plugin.esm.js",
+      "require": "./dist/vite-plugin.js",
+      "types": "./dist/vite-plugin.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "rollup -c && npm run copy-types",
+    "copy-types": "cp src/*.d.ts dist/",
+    "dev": "rollup -c -w",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "ai",
+    "context",
+    "debugging",
+    "developer-tools",
+    "browser-extension",
+    "react",
+    "vue",
+    "vite"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anthropics/ai-context-reporter"
+  },
+  "peerDependencies": {
+    "react": ">=16.8.0",
+    "vue": ">=2.6.0 || >=3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "vue": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@rollup/plugin-node-resolve": "^15.0.0",
+    "@rollup/plugin-terser": "^0.4.0",
+    "rollup": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}
