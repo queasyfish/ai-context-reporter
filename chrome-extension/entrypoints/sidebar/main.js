@@ -1,5 +1,8 @@
 // Sidebar script - handles element selection display and capture
 import { getElementCaptureCode } from '../../lib/element-capture.js';
+import { getFrameworkDetectorCode } from '../../lib/framework-detector.js';
+import { getConsoleLogReaderCode } from '../../lib/console-capture.js';
+import { getNetworkLogReaderCode } from '../../lib/network-capture.js';
 import { saveReport, getReports, deleteReport, clearReports, getProjectMappings, saveProjectMappings } from '../../lib/storage.ts';
 
 // Constants
@@ -11,19 +14,16 @@ var projectMappingsCache = [];
 // State variable to track currently selected element data
 var currentElementData = null;
 
+// Details expanded state
+var detailsExpanded = false;
+
 // Generate smart filename from report
 function generateFilename(report) {
   var parts = [];
-
-  // Date prefix for sorting
   var date = new Date().toISOString().slice(0, 10);
   parts.push(date);
-
-  // Time for uniqueness
   var time = new Date().toISOString().slice(11, 19).replace(/:/g, '');
   parts.push(time);
-
-  // Hostname from URL
   try {
     var hostname = new URL(report.url).hostname
       .replace(/^www\./, '')
@@ -33,14 +33,11 @@ function generateFilename(report) {
   } catch (e) {
     parts.push('unknown');
   }
-
-  // Element identifier
   var element = (report.element && report.element.tagName) || 'element';
   var id = (report.element && report.element.elementId)
     ? '-' + report.element.elementId.replace(/[^a-z0-9]/gi, '-').slice(0, 20)
     : '';
   parts.push(element + id);
-
   return parts.join('-') + '.md';
 }
 
@@ -48,11 +45,30 @@ function generateFilename(report) {
 function formatReportAsMarkdown(report) {
   var lines = [
     '# Element Context Report',
-    '',
-    '**Page URL:** ' + (report.url || ''),
-    '**Captured:** ' + new Date().toLocaleString(),
     ''
   ];
+
+  // Framework info (Phase 1)
+  if (report.framework && report.framework.name) {
+    var frameworkStr = report.framework.name;
+    if (report.framework.version) {
+      frameworkStr += ' ' + report.framework.version;
+    }
+    lines.push('**Framework:** ' + frameworkStr);
+  }
+
+  // Component info (Phase 1)
+  if (report.component && report.component.name) {
+    var componentStr = report.component.name;
+    if (report.component.file) {
+      componentStr += ' (' + report.component.file + ')';
+    }
+    lines.push('**Component:** ' + componentStr);
+  }
+
+  lines.push('**Page URL:** ' + (report.url || ''));
+  lines.push('**Captured:** ' + new Date().toLocaleString());
+  lines.push('');
 
   if (report.comment) {
     lines.push('## Comment');
@@ -91,23 +107,75 @@ function formatReportAsMarkdown(report) {
     }
   }
 
-  return lines.join('\n');
-}
+  // Component Props (Phase 1)
+  if (report.component && report.component.props && Object.keys(report.component.props).length > 0) {
+    lines.push('## Component Props');
+    lines.push('');
+    lines.push('```json');
+    lines.push(JSON.stringify(report.component.props, null, 2));
+    lines.push('```');
+    lines.push('');
+  }
 
-// Export a single report to file via background script
-async function exportReportToFile(report) {
-  return new Promise(function(resolve, reject) {
-    chrome.runtime.sendMessage({
-      type: 'EXPORT_REPORT',
-      report: report
-    }, function(response) {
-      if (response && response.success) {
-        resolve();
-      } else {
-        reject(new Error(response ? response.error : 'Export failed'));
-      }
+  // Component State (Phase 1)
+  if (report.component && report.component.state && Object.keys(report.component.state).length > 0) {
+    lines.push('## Component State');
+    lines.push('');
+    lines.push('```json');
+    lines.push(JSON.stringify(report.component.state, null, 2));
+    lines.push('```');
+    lines.push('');
+  }
+
+  // Data Attributes (Phase 1)
+  if (report.dataAttributes && Object.keys(report.dataAttributes).length > 0) {
+    lines.push('## Data Attributes');
+    lines.push('');
+    Object.keys(report.dataAttributes).forEach(function(key) {
+      lines.push('- `' + key + '`: `' + report.dataAttributes[key] + '`');
     });
-  });
+    lines.push('');
+  }
+
+  // Console Errors (Phase 1)
+  if (report.consoleErrors && report.consoleErrors.length > 0) {
+    lines.push('## Recent Console Errors');
+    lines.push('');
+    report.consoleErrors.forEach(function(entry) {
+      var typeLabel = entry.type === 'error' ? 'ERROR' : 'WARN';
+      var time = new Date(entry.timestamp).toLocaleTimeString();
+      lines.push('```');
+      lines.push('[' + typeLabel + ' ' + time + '] ' + entry.message);
+      if (entry.stack) {
+        lines.push('');
+        var stackLines = entry.stack.split('\n').slice(0, 5);
+        lines.push(stackLines.join('\n'));
+      }
+      lines.push('```');
+      lines.push('');
+    });
+  }
+
+  // Network Requests (Phase 1)
+  if (report.networkRequests && report.networkRequests.length > 0) {
+    lines.push('## Recent Network Activity');
+    lines.push('');
+    lines.push('| Method | URL | Status | Duration |');
+    lines.push('|--------|-----|--------|----------|');
+    report.networkRequests.forEach(function(req) {
+      var url = req.url;
+      if (url.length > 60) {
+        url = url.substring(0, 57) + '...';
+      }
+      var status = req.status || 0;
+      var statusStr = req.failed ? '**' + status + '**' : String(status);
+      var duration = req.duration ? req.duration + 'ms' : '-';
+      lines.push('| ' + (req.method || 'GET') + ' | `' + url + '` | ' + statusStr + ' | ' + duration + ' |');
+    });
+    lines.push('');
+  }
+
+  return lines.join('\n');
 }
 
 // Export all reports to files
@@ -141,28 +209,208 @@ function captureElementData() {
   });
 }
 
+// Capture framework and component info via eval in inspected page context
+function captureFrameworkData() {
+  return new Promise(function(resolve) {
+    chrome.devtools.inspectedWindow.eval(
+      getFrameworkDetectorCode(),
+      function(result, isException) {
+        if (isException || !result) {
+          resolve(null);
+        } else {
+          resolve(result);
+        }
+      }
+    );
+  });
+}
+
+// Capture console errors via eval in inspected page context
+function captureConsoleErrors() {
+  return new Promise(function(resolve) {
+    chrome.devtools.inspectedWindow.eval(
+      getConsoleLogReaderCode(),
+      function(result, isException) {
+        if (isException || !result) {
+          resolve([]);
+        } else {
+          resolve(result);
+        }
+      }
+    );
+  });
+}
+
+// Capture network requests via eval in inspected page context
+function captureNetworkRequests() {
+  return new Promise(function(resolve) {
+    chrome.devtools.inspectedWindow.eval(
+      getNetworkLogReaderCode(),
+      function(result, isException) {
+        if (isException || !result) {
+          resolve([]);
+        } else {
+          resolve(result);
+        }
+      }
+    );
+  });
+}
+
 // Update display with captured element data
 function updateDisplay() {
-  captureElementData().then(function(data) {
-    // Store captured data for save functionality
+  // Capture all data in parallel
+  Promise.all([
+    captureElementData(),
+    captureFrameworkData(),
+    captureConsoleErrors(),
+    captureNetworkRequests()
+  ]).then(function(results) {
+    var data = results[0];
+    var frameworkData = results[1];
+    var consoleErrors = results[2];
+    var networkRequests = results[3];
+
+    // Merge framework data into element data
+    if (data && frameworkData) {
+      data.framework = frameworkData.framework;
+      data.component = frameworkData.component;
+      data.dataAttributes = frameworkData.dataAttributes;
+      data.eventListeners = frameworkData.eventListeners;
+      data.developerContext = frameworkData.developerContext;
+    }
+    if (data) {
+      data.consoleErrors = consoleErrors || [];
+      data.networkRequests = networkRequests || [];
+    }
+
     currentElementData = data;
 
-    var urlEl = document.getElementById('url-value');
+    var placeholder = document.getElementById('element-placeholder');
+    var elementInfo = document.getElementById('element-info');
+    var elementTag = document.getElementById('element-tag');
+    var elementIdentifiers = document.getElementById('element-identifiers');
+    var elementUrl = document.getElementById('element-url');
     var selectorEl = document.getElementById('selector-value');
     var xpathEl = document.getElementById('xpath-value');
     var stylesEl = document.getElementById('styles-value');
 
+    // Phase 1 elements
+    var frameworkDetail = document.getElementById('framework-detail');
+    var frameworkValue = document.getElementById('framework-value');
+    var componentDetail = document.getElementById('component-detail');
+    var componentValue = document.getElementById('component-value');
+    var propsDetail = document.getElementById('props-detail');
+    var propsValue = document.getElementById('props-value');
+    var stateDetail = document.getElementById('state-detail');
+    var stateValue = document.getElementById('state-value');
+    var dataAttrsDetail = document.getElementById('data-attrs-detail');
+    var dataAttrsValue = document.getElementById('data-attrs-value');
+    var consoleErrorsDetail = document.getElementById('console-errors-detail');
+    var consoleErrorsValue = document.getElementById('console-errors-value');
+    var networkDetail = document.getElementById('network-detail');
+    var networkValue = document.getElementById('network-value');
+
     if (!data) {
-      urlEl.textContent = '-';
-      selectorEl.textContent = 'No element selected';
+      placeholder.style.display = 'block';
+      elementInfo.classList.remove('visible');
+      selectorEl.textContent = '-';
       xpathEl.textContent = '-';
       stylesEl.textContent = '-';
+      // Hide Phase 1 details
+      frameworkDetail.style.display = 'none';
+      componentDetail.style.display = 'none';
+      propsDetail.style.display = 'none';
+      stateDetail.style.display = 'none';
+      dataAttrsDetail.style.display = 'none';
+      consoleErrorsDetail.style.display = 'none';
+      networkDetail.style.display = 'none';
       currentElementData = null;
+      updateSaveButtonState();
       return;
     }
 
-    // Display URL
-    urlEl.textContent = data.url || '-';
+    // Show element info, hide placeholder
+    placeholder.style.display = 'none';
+    elementInfo.classList.add('visible');
+
+    // Build tag display
+    var tagName = data.tagName || 'element';
+    elementTag.textContent = '<' + tagName + '>';
+
+    // Build identifiers display
+    var identifiers = [];
+    if (data.elementId) {
+      identifiers.push('<span class="element-id">#' + escapeHtml(data.elementId) + '</span>');
+    }
+    if (data.className) {
+      var classes = data.className.split(' ').filter(function(c) { return c; }).slice(0, 3);
+      classes.forEach(function(c) {
+        identifiers.push('<span class="element-class">.' + escapeHtml(c) + '</span>');
+      });
+    }
+    elementIdentifiers.innerHTML = identifiers.join(' ') || '<span style="opacity:0.5">No ID or classes</span>';
+
+    // Display URL (truncated)
+    try {
+      var url = new URL(data.url);
+      elementUrl.textContent = url.pathname.length > 40
+        ? url.hostname + url.pathname.slice(0, 37) + '...'
+        : url.hostname + url.pathname;
+    } catch (e) {
+      elementUrl.textContent = data.url || '-';
+    }
+
+    // Display Framework (Phase 1)
+    if (data.framework && data.framework.name) {
+      frameworkDetail.style.display = 'block';
+      var frameworkStr = data.framework.name;
+      if (data.framework.version) {
+        frameworkStr += ' ' + data.framework.version;
+      }
+      frameworkValue.innerHTML = '<span class="framework-badge">' + escapeHtml(frameworkStr) + '</span>';
+    } else {
+      frameworkDetail.style.display = 'none';
+    }
+
+    // Display Component (Phase 1)
+    if (data.component && data.component.name) {
+      componentDetail.style.display = 'block';
+      var componentHtml = '<span class="component-name">' + escapeHtml(data.component.name) + '</span>';
+      if (data.component.file) {
+        componentHtml += '<span class="component-file">' + escapeHtml(data.component.file) + '</span>';
+      }
+      componentValue.innerHTML = componentHtml;
+    } else {
+      componentDetail.style.display = 'none';
+    }
+
+    // Display Component Props (Phase 1)
+    if (data.component && data.component.props && Object.keys(data.component.props).length > 0) {
+      propsDetail.style.display = 'block';
+      propsValue.textContent = JSON.stringify(data.component.props, null, 2);
+    } else {
+      propsDetail.style.display = 'none';
+    }
+
+    // Display Component State (Phase 1)
+    if (data.component && data.component.state && Object.keys(data.component.state).length > 0) {
+      stateDetail.style.display = 'block';
+      stateValue.textContent = JSON.stringify(data.component.state, null, 2);
+    } else {
+      stateDetail.style.display = 'none';
+    }
+
+    // Display Data Attributes (Phase 1)
+    if (data.dataAttributes && Object.keys(data.dataAttributes).length > 0) {
+      dataAttrsDetail.style.display = 'block';
+      var attrsText = Object.keys(data.dataAttributes).map(function(key) {
+        return key + '="' + data.dataAttributes[key] + '"';
+      }).join('\n');
+      dataAttrsValue.textContent = attrsText;
+    } else {
+      dataAttrsDetail.style.display = 'none';
+    }
 
     // Display CSS Selector
     selectorEl.textContent = data.selector || '-';
@@ -178,13 +426,53 @@ function updateDisplay() {
         var key = keys[i];
         var value = data.computedStyles[key];
         if (value) {
-          stylesText += key + ': ' + value + '\n';
+          stylesText += key + ': ' + value + ';\n';
         }
       }
       stylesEl.textContent = stylesText.trim() || '-';
     } else {
       stylesEl.textContent = '-';
     }
+
+    // Display Console Errors (Phase 1)
+    if (data.consoleErrors && data.consoleErrors.length > 0) {
+      consoleErrorsDetail.style.display = 'block';
+      var errorsHtml = data.consoleErrors.slice(-5).map(function(entry) {
+        var typeLabel = entry.type === 'error' ? 'ERROR' : 'WARN';
+        var msg = entry.message.length > 200 ? entry.message.substring(0, 200) + '...' : entry.message;
+        return '<div class="console-error-entry">' +
+          '<span class="console-error-type">[' + typeLabel + ']</span>' +
+          '<div class="console-error-msg">' + escapeHtml(msg) + '</div>' +
+        '</div>';
+      }).join('');
+      consoleErrorsValue.innerHTML = errorsHtml;
+    } else {
+      consoleErrorsDetail.style.display = 'none';
+    }
+
+    // Display Network Activity (Phase 1)
+    if (data.networkRequests && data.networkRequests.length > 0) {
+      networkDetail.style.display = 'block';
+      var networkHtml = data.networkRequests.slice(-10).map(function(req) {
+        var url = req.url;
+        try {
+          var urlObj = new URL(req.url);
+          url = urlObj.pathname.length > 30 ? urlObj.pathname.substring(0, 27) + '...' : urlObj.pathname;
+        } catch (e) {}
+        var statusClass = req.failed || req.status >= 400 ? 'failed' : '';
+        return '<div class="network-entry">' +
+          '<span class="network-method">' + (req.method || 'GET') + '</span>' +
+          '<span class="network-url" title="' + escapeHtml(req.url) + '">' + escapeHtml(url) + '</span>' +
+          '<span class="network-status ' + statusClass + '">' + (req.status || '-') + '</span>' +
+          '<span class="network-duration">' + (req.duration ? req.duration + 'ms' : '-') + '</span>' +
+        '</div>';
+      }).join('');
+      networkValue.innerHTML = networkHtml;
+    } else {
+      networkDetail.style.display = 'none';
+    }
+
+    updateSaveButtonState();
   });
 }
 
@@ -202,21 +490,15 @@ function updateSaveButtonState() {
 function clearFeedback() {
   var feedbackEl = document.getElementById('save-feedback');
   feedbackEl.textContent = '';
-  feedbackEl.classList.remove('success');
-  feedbackEl.classList.remove('error');
+  feedbackEl.classList.remove('success', 'error');
 }
 
 // Show feedback message
 function showFeedback(message, isSuccess) {
   var feedbackEl = document.getElementById('save-feedback');
   feedbackEl.textContent = message;
-  feedbackEl.classList.remove('success');
-  feedbackEl.classList.remove('error');
-  if (isSuccess) {
-    feedbackEl.classList.add('success');
-  } else {
-    feedbackEl.classList.add('error');
-  }
+  feedbackEl.classList.remove('success', 'error');
+  feedbackEl.classList.add(isSuccess ? 'success' : 'error');
   setTimeout(clearFeedback, 3000);
 }
 
@@ -230,15 +512,14 @@ async function handleSave() {
     return;
   }
 
-  // Re-capture element data for freshness
-  var elementData = await captureElementData();
-
-  if (!elementData) {
+  // Use the already captured data from currentElementData
+  if (!currentElementData) {
     showFeedback('Please select an element first', false);
     return;
   }
 
-  // Build report object
+  var elementData = currentElementData;
+
   var report = {
     reportId: crypto.randomUUID(),
     url: elementData.url,
@@ -251,12 +532,19 @@ async function handleSave() {
       tagName: elementData.tagName,
       elementId: elementData.elementId,
       textContent: elementData.textContent
-    }
+    },
+    // Phase 1 enhanced fields
+    framework: elementData.framework,
+    component: elementData.component,
+    dataAttributes: elementData.dataAttributes,
+    eventListeners: elementData.eventListeners,
+    consoleErrors: elementData.consoleErrors ? elementData.consoleErrors.slice(-10) : [],
+    networkRequests: elementData.networkRequests ? elementData.networkRequests.slice(-20) : [],
+    developerContext: elementData.developerContext
   };
 
   try {
     await saveReport(report);
-    // Export via background script to get folder info
     var response = await new Promise(function(resolve, reject) {
       chrome.runtime.sendMessage({
         type: 'EXPORT_REPORT',
@@ -271,9 +559,9 @@ async function handleSave() {
     });
     commentInput.value = '';
     updateSaveButtonState();
-    var folderPath = '~/Downloads/' + response.folder + '/';
+    updateReportsBadge();
     var projectInfo = response.projectName ? ' (' + response.projectName + ')' : '';
-    showFeedback('Saved to ' + folderPath + projectInfo, true);
+    showFeedback('Saved!' + projectInfo, true);
   } catch (error) {
     console.error('Failed to save report:', error);
     showFeedback('Failed to save report', false);
@@ -284,7 +572,7 @@ async function handleSave() {
 function truncate(str, maxLength) {
   if (!str) return '';
   if (str.length <= maxLength) return str;
-  return str.substring(0, maxLength - 3) + '...';
+  return str.substring(0, maxLength - 1) + '…';
 }
 
 // Escape HTML to prevent XSS
@@ -295,19 +583,30 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// Update reports badge count
+async function updateReportsBadge() {
+  var reports = await getReports();
+  var badge = document.getElementById('reports-badge');
+  if (reports.length > 0) {
+    badge.textContent = reports.length > 99 ? '99+' : reports.length;
+    badge.style.display = 'inline';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
 // Switch between capture, reports, and settings views
 function switchView(viewName) {
   document.querySelectorAll('.view').forEach(function(v) {
-    v.hidden = true;
+    v.classList.remove('active');
   });
-  document.getElementById(viewName + '-view').hidden = false;
+  document.getElementById(viewName + '-view').classList.add('active');
 
   document.querySelectorAll('.tab-btn').forEach(function(t) {
     t.classList.remove('active');
   });
   document.querySelector('[data-view="' + viewName + '"]').classList.add('active');
 
-  // Refresh content when switching views
   if (viewName === 'reports') {
     renderReportList();
   } else if (viewName === 'settings') {
@@ -315,41 +614,61 @@ function switchView(viewName) {
   }
 }
 
+// Toggle details section
+function toggleDetails() {
+  detailsExpanded = !detailsExpanded;
+  var toggle = document.getElementById('details-toggle');
+  var content = document.getElementById('details-content');
+
+  if (detailsExpanded) {
+    toggle.classList.add('expanded');
+    toggle.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg> Hide Details';
+    content.classList.add('visible');
+  } else {
+    toggle.classList.remove('expanded');
+    toggle.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg> Show Details';
+    content.classList.remove('visible');
+  }
+}
+
 // Render report list from storage
 async function renderReportList() {
   var reports = await getReports();
   var container = document.getElementById('report-list');
+  updateReportsBadge();
 
   if (reports.length === 0) {
-    container.innerHTML = '<p class="empty-state">No reports saved yet.</p>';
+    container.innerHTML = '<p class="empty-state">No reports saved yet</p>';
     return;
   }
 
-  container.innerHTML = reports.map(function(report, index) {
-    // Build element identifier display
-    var elemDisplay = '';
-    if (report.element && report.element.elementId) {
-      elemDisplay = report.element.elementId;
-      if (report.element.textContent) {
-        elemDisplay += ' "' + truncate(report.element.textContent, 20) + '"';
-      }
+  container.innerHTML = reports.map(function(report) {
+    var tagName = (report.element && report.element.tagName) || 'element';
+    var elemId = (report.element && report.element.elementId) ? '#' + report.element.elementId : '';
+    var elemDisplay = '<' + tagName + '>' + elemId;
+
+    var urlDisplay = '';
+    try {
+      var url = new URL(report.url);
+      urlDisplay = url.hostname;
+    } catch (e) {
+      urlDisplay = truncate(report.url, 30);
     }
 
-    return '<div class="report-item" draggable="true" data-id="' + escapeHtml(report.reportId) + '" data-index="' + index + '">' +
-      '<div class="report-summary">' +
-        '<span class="report-url">' + escapeHtml(truncate(report.url, 50)) + '</span>' +
-        (elemDisplay ? '<span class="report-element">' + escapeHtml(elemDisplay) + '</span>' : '') +
-        '<span class="report-comment">' + escapeHtml(truncate(report.comment, 60)) + '</span>' +
+    return '<div class="report-item" draggable="true" data-id="' + escapeHtml(report.reportId) + '">' +
+      '<div class="report-meta">' +
+        '<span class="report-element">' + escapeHtml(elemDisplay) + '</span>' +
+        '<span class="report-url">' + escapeHtml(urlDisplay) + '</span>' +
       '</div>' +
+      '<p class="report-comment">' + escapeHtml(report.comment) + '</p>' +
       '<div class="report-actions">' +
-        '<button class="action-btn export-btn" data-id="' + escapeHtml(report.reportId) + '" title="Export to ai-agent-reports folder">↓</button>' +
         '<button class="action-btn copy-btn" data-id="' + escapeHtml(report.reportId) + '">Copy</button>' +
+        '<button class="action-btn export-btn" data-id="' + escapeHtml(report.reportId) + '">Export</button>' +
         '<button class="action-btn delete-btn" data-id="' + escapeHtml(report.reportId) + '">Delete</button>' +
       '</div>' +
     '</div>';
   }).join('');
 
-  // Add drag event listeners
   container.querySelectorAll('.report-item').forEach(function(item) {
     item.addEventListener('dragstart', handleDragStart);
     item.addEventListener('dragend', handleDragEnd);
@@ -361,11 +680,9 @@ async function handleDragStart(e) {
   var reportId = e.currentTarget.dataset.id;
   var reports = await getReports();
   var report = reports.find(function(r) { return r.reportId === reportId; });
-
   if (!report) return;
 
   e.currentTarget.classList.add('dragging');
-
   var markdown = formatReportAsMarkdown(report);
   e.dataTransfer.setData('text/plain', markdown);
   e.dataTransfer.setData('text/markdown', markdown);
@@ -379,21 +696,20 @@ function handleDragEnd(e) {
 
 // ============ Settings Management ============
 
-// Render project mappings list
 async function renderMappingsList() {
   var mappings = await getProjectMappings();
   projectMappingsCache = mappings;
   var container = document.getElementById('mappings-list');
 
   if (mappings.length === 0) {
-    container.innerHTML = '<p class="empty-state">No project mappings configured.</p>';
+    container.innerHTML = '<p class="empty-state">No project mappings configured</p>';
     return;
   }
 
   container.innerHTML = mappings.map(function(mapping) {
-    var patternsDisplay = mapping.patterns.slice(0, 3).join(', ');
-    if (mapping.patterns.length > 3) {
-      patternsDisplay += ' +' + (mapping.patterns.length - 3) + ' more';
+    var patternsDisplay = mapping.patterns.slice(0, 2).join(', ');
+    if (mapping.patterns.length > 2) {
+      patternsDisplay += ' +' + (mapping.patterns.length - 2);
     }
     return '<div class="mapping-item" data-id="' + escapeHtml(mapping.id) + '">' +
       '<div class="mapping-header">' +
@@ -404,12 +720,11 @@ async function renderMappingsList() {
         '</div>' +
       '</div>' +
       '<span class="mapping-patterns">' + escapeHtml(patternsDisplay) + '</span>' +
-      '<span class="mapping-folder">→ ai-agent-reports/' + escapeHtml(mapping.folder) + '/</span>' +
+      '<span class="mapping-folder">→ ' + escapeHtml(mapping.folder) + '/</span>' +
     '</div>';
   }).join('');
 }
 
-// Open mapping dialog for add/edit
 function openMappingDialog(mapping) {
   var dialog = document.getElementById('mapping-dialog');
   var form = document.getElementById('mapping-form');
@@ -419,13 +734,11 @@ function openMappingDialog(mapping) {
   var folderInput = document.getElementById('mapping-folder');
 
   if (mapping) {
-    // Edit mode
     idInput.value = mapping.id;
     nameInput.value = mapping.name;
     patternsInput.value = mapping.patterns.join('\n');
     folderInput.value = mapping.folder;
   } else {
-    // Add mode
     form.reset();
     idInput.value = '';
   }
@@ -433,7 +746,6 @@ function openMappingDialog(mapping) {
   dialog.showModal();
 }
 
-// Handle mapping form submission
 async function handleMappingSubmit(e) {
   e.preventDefault();
 
@@ -455,13 +767,11 @@ async function handleMappingSubmit(e) {
   var mappings = await getProjectMappings();
 
   if (id) {
-    // Update existing
     var index = mappings.findIndex(function(m) { return m.id === id; });
     if (index !== -1) {
       mappings[index] = { id: id, name: name, patterns: patterns, folder: folder };
     }
   } else {
-    // Add new
     mappings.push({
       id: crypto.randomUUID(),
       name: name,
@@ -476,16 +786,14 @@ async function handleMappingSubmit(e) {
   showFeedback('Project mapping saved', true);
 }
 
-// Handle mapping deletion
 async function handleMappingDelete(mappingId) {
   var mappings = await getProjectMappings();
   var filtered = mappings.filter(function(m) { return m.id !== mappingId; });
   await saveProjectMappings(filtered);
   await renderMappingsList();
-  showFeedback('Project mapping deleted', true);
+  showFeedback('Mapping deleted', true);
 }
 
-// Copy report to clipboard as Markdown
 async function copyReportToClipboard(reportId) {
   var reports = await getReports();
   var report = reports.find(function(r) { return r.reportId === reportId; });
@@ -499,14 +807,13 @@ async function copyReportToClipboard(reportId) {
 
   try {
     await navigator.clipboard.writeText(markdown);
-    showFeedback('Copied to clipboard!', true);
+    showFeedback('Copied!', true);
   } catch (error) {
     console.error('Clipboard write failed:', error);
     showFeedback('Failed to copy', false);
   }
 }
 
-// Export a single report
 async function handleExportReport(reportId) {
   var reports = await getReports();
   var report = reports.find(function(r) { return r.reportId === reportId; });
@@ -529,40 +836,36 @@ async function handleExportReport(reportId) {
         }
       });
     });
-    var folderPath = '~/Downloads/' + response.folder + '/';
     var projectInfo = response.projectName ? ' (' + response.projectName + ')' : '';
-    showFeedback('Exported to ' + folderPath + projectInfo, true);
+    showFeedback('Exported!' + projectInfo, true);
   } catch (error) {
     console.error('Export failed:', error);
     showFeedback('Failed to export', false);
   }
 }
 
-// Delete a single report
 async function handleDeleteReport(reportId) {
   try {
     await deleteReport(reportId);
     await renderReportList();
-    showFeedback('Report deleted', true);
+    showFeedback('Deleted', true);
   } catch (error) {
     console.error('Delete failed:', error);
     showFeedback('Failed to delete', false);
   }
 }
 
-// Export all reports
 async function handleExportAll() {
   try {
     var results = await exportAllReports();
     var successCount = results.filter(function(r) { return r.success; }).length;
-    showFeedback('Exported ' + successCount + ' report(s) to ~/Downloads/' + EXPORT_FOLDER + '/', true);
+    showFeedback('Exported ' + successCount + ' reports', true);
   } catch (error) {
     console.error('Export all failed:', error);
-    showFeedback('Failed to export reports', false);
+    showFeedback('Failed to export', false);
   }
 }
 
-// Clear all reports with confirmation
 async function handleClearAll() {
   var dialog = document.getElementById('clear-confirm-dialog');
 
@@ -583,30 +886,36 @@ async function handleClearAll() {
     showFeedback('All reports cleared', true);
   } catch (error) {
     console.error('Clear all failed:', error);
-    showFeedback('Failed to clear reports', false);
+    showFeedback('Failed to clear', false);
   }
 }
+
+// ============ Event Listeners ============
 
 // Listen for selection changes
 chrome.devtools.panels.elements.onSelectionChanged.addListener(function() {
   updateDisplay();
-  updateSaveButtonState();
 });
 
-// Comment input event listener
+// Comment input
 document.getElementById('comment-input').addEventListener('input', updateSaveButtonState);
 
-// Save button click event listener
+// Save button
 document.getElementById('save-btn').addEventListener('click', handleSave);
 
-// Tab navigation event listeners
+// Details toggle
+document.getElementById('details-toggle').addEventListener('click', toggleDetails);
+
+// Tab navigation
 document.querySelectorAll('.tab-btn').forEach(function(btn) {
   btn.addEventListener('click', function() {
-    switchView(btn.dataset.view);
+    if (btn.dataset.view) {
+      switchView(btn.dataset.view);
+    }
   });
 });
 
-// Event delegation for report list actions
+// Report list actions
 document.getElementById('report-list').addEventListener('click', async function(e) {
   var button = e.target.closest('button');
   if (!button) return;
@@ -623,29 +932,26 @@ document.getElementById('report-list').addEventListener('click', async function(
   }
 });
 
-// Export all button listener
-var exportAllBtn = document.getElementById('export-all-btn');
-if (exportAllBtn) {
-  exportAllBtn.addEventListener('click', handleExportAll);
-}
+// Export all button
+document.getElementById('export-all-btn').addEventListener('click', handleExportAll);
 
-// Clear all button listener
+// Clear all button
 document.getElementById('clear-all-btn').addEventListener('click', handleClearAll);
 
-// Settings: Add mapping button listener
+// Settings: Add mapping
 document.getElementById('add-mapping-btn').addEventListener('click', function() {
   openMappingDialog(null);
 });
 
-// Settings: Mapping form submit listener
+// Settings: Mapping form submit
 document.getElementById('mapping-form').addEventListener('submit', handleMappingSubmit);
 
-// Settings: Mapping dialog cancel button
+// Settings: Mapping dialog cancel
 document.getElementById('mapping-cancel').addEventListener('click', function() {
   document.getElementById('mapping-dialog').close();
 });
 
-// Settings: Event delegation for mapping list actions
+// Settings: Mapping list actions
 document.getElementById('mappings-list').addEventListener('click', async function(e) {
   var button = e.target.closest('button');
   if (!button) return;
@@ -663,6 +969,8 @@ document.getElementById('mappings-list').addEventListener('click', async functio
   }
 });
 
-// Initial update
+// ============ Initialize ============
+
 updateDisplay();
 updateSaveButtonState();
+updateReportsBadge();

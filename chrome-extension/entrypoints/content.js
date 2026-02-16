@@ -3,7 +3,11 @@
  *
  * Provides a custom element picker activated via context menu.
  * Highlights elements on hover and shows capture modal on click.
+ * Captures framework info, console errors, and network requests.
  */
+
+import { getConsoleInjectorCode, getConsoleLogReaderCode } from '../lib/console-capture.js';
+import { getNetworkInjectorCode, getNetworkLogReaderCode } from '../lib/network-capture.js';
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -15,6 +19,27 @@ export default defineContentScript({
     var pickerActive = false;
     var highlightOverlay = null;
     var hoveredElement = null;
+
+    // ========== INJECTOR INITIALIZATION ==========
+
+    // Inject console and network capture code into the page context
+    function injectCaptureScripts() {
+      // Create a script element to inject code into the page context
+      var script = document.createElement('script');
+      script.textContent = `
+        ${getConsoleInjectorCode()}
+        ${getNetworkInjectorCode()}
+      `;
+      (document.head || document.documentElement).appendChild(script);
+      script.remove();
+    }
+
+    // Inject on load
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', injectCaptureScripts);
+    } else {
+      injectCaptureScripts();
+    }
 
     // ========== ELEMENT PICKER ==========
 
@@ -161,6 +186,30 @@ export default defineContentScript({
     function captureElementData(el) {
       if (!el) return null;
 
+      // Get captured logs from page context
+      var logs = readCapturedLogs();
+
+      // Get framework and component info
+      var framework = detectFramework();
+      var component = getComponentInfo(el);
+
+      // Check for developer-provided context via data attribute
+      var dataAttrs = getDataAttributes(el);
+      var developerContext = null;
+      if (dataAttrs['data-ai-context']) {
+        try {
+          developerContext = JSON.parse(dataAttrs['data-ai-context']);
+          if (developerContext.component) {
+            component.name = component.name || developerContext.component;
+          }
+          if (developerContext.file) {
+            component.file = developerContext.file;
+          }
+        } catch (e) {
+          // Invalid JSON in data-ai-context
+        }
+      }
+
       return {
         selector: getCssSelector(el),
         xpath: getXPath(el),
@@ -168,7 +217,15 @@ export default defineContentScript({
         url: location.href,
         tagName: el.tagName.toLowerCase(),
         elementId: getElementId(el),
-        textContent: getTextContent(el)
+        textContent: getTextContent(el),
+        // Phase 1 enhanced fields
+        framework: framework,
+        component: component,
+        dataAttributes: dataAttrs,
+        eventListeners: getEventListenerTypes(el),
+        consoleErrors: logs.consoleErrors.slice(-10), // Last 10 errors
+        networkRequests: logs.networkRequests.slice(-20), // Last 20 requests
+        developerContext: developerContext
       };
     }
 
@@ -307,6 +364,239 @@ export default defineContentScript({
       }
 
       return textContent;
+    }
+
+    // ========== FRAMEWORK DETECTION ==========
+
+    function detectFramework() {
+      // React detection
+      if (window.React || window.__REACT_DEVTOOLS_GLOBAL_HOOK__) {
+        var version = null;
+        if (window.React && window.React.version) {
+          version = window.React.version;
+        } else if (window.__REACT_DEVTOOLS_GLOBAL_HOOK__ && window.__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers) {
+          var renderers = window.__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers;
+          if (renderers.size > 0) {
+            var firstRenderer = renderers.values().next().value;
+            if (firstRenderer && firstRenderer.version) {
+              version = firstRenderer.version;
+            }
+          }
+        }
+        return { name: 'react', version: version };
+      }
+
+      // Vue detection
+      if (window.Vue) {
+        return { name: 'vue', version: window.Vue.version || null };
+      }
+      if (window.__VUE__) {
+        return { name: 'vue', version: '3.x' };
+      }
+
+      // Angular detection
+      if (window.ng || window.getAllAngularRootElements) {
+        var version = null;
+        if (window.ng && window.ng.VERSION) {
+          version = window.ng.VERSION.full || window.ng.VERSION.major + '.' + window.ng.VERSION.minor;
+        } else if (document.querySelector('[ng-version]')) {
+          version = document.querySelector('[ng-version]').getAttribute('ng-version');
+        }
+        return { name: 'angular', version: version };
+      }
+
+      // Svelte detection
+      if (document.querySelector('[class*="svelte-"]') || window.__svelte) {
+        return { name: 'svelte', version: null };
+      }
+
+      // Check for framework indicators in DOM
+      if (document.querySelector('[data-reactroot], [data-reactid]')) {
+        return { name: 'react', version: null };
+      }
+      if (document.querySelector('[data-v-]') || document.querySelector('[v-cloak]')) {
+        return { name: 'vue', version: null };
+      }
+      if (document.querySelector('[_ngcontent-]') || document.querySelector('[ng-reflect-]')) {
+        return { name: 'angular', version: null };
+      }
+
+      return { name: null, version: null };
+    }
+
+    function getComponentInfo(el) {
+      var component = { name: null, props: null, state: null, file: null };
+
+      // React component extraction
+      var fiberKey = Object.keys(el).find(function(k) {
+        return k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$');
+      });
+
+      if (fiberKey) {
+        var fiber = el[fiberKey];
+        var current = fiber;
+        while (current) {
+          if (current.type && typeof current.type === 'function') {
+            component.name = current.type.displayName || current.type.name || 'Anonymous';
+            if (current.memoizedProps) {
+              component.props = sanitizeObject(current.memoizedProps, 2);
+            }
+            if (current.memoizedState && current.tag === 1) {
+              component.state = sanitizeObject(current.memoizedState, 2);
+            }
+            if (current._debugSource) {
+              component.file = current._debugSource.fileName;
+            }
+            break;
+          }
+          current = current.return;
+        }
+        return component;
+      }
+
+      // Vue 3 component extraction
+      if (el.__vueParentComponent) {
+        var vc = el.__vueParentComponent;
+        component.name = vc.type && (vc.type.name || vc.type.__name) || 'Anonymous';
+        if (vc.props) {
+          component.props = sanitizeObject(vc.props, 2);
+        }
+        if (vc.setupState) {
+          component.state = sanitizeObject(vc.setupState, 2);
+        }
+        if (vc.type && vc.type.__file) {
+          component.file = vc.type.__file;
+        }
+        return component;
+      }
+
+      // Vue 2 component extraction
+      if (el.__vue__) {
+        var vm = el.__vue__;
+        component.name = vm.$options && (vm.$options.name || vm.$options._componentTag) || 'Anonymous';
+        if (vm.$props) {
+          component.props = sanitizeObject(vm.$props, 2);
+        }
+        if (vm.$data) {
+          component.state = sanitizeObject(vm.$data, 2);
+        }
+        if (vm.$options && vm.$options.__file) {
+          component.file = vm.$options.__file;
+        }
+        return component;
+      }
+
+      // Angular component extraction
+      if (window.ng && window.ng.getComponent) {
+        try {
+          var ngComponent = window.ng.getComponent(el);
+          if (ngComponent) {
+            component.name = ngComponent.constructor.name || 'Anonymous';
+            var props = {};
+            Object.getOwnPropertyNames(ngComponent).forEach(function(key) {
+              if (!key.startsWith('_') && typeof ngComponent[key] !== 'function') {
+                props[key] = sanitizeValue(ngComponent[key], 2);
+              }
+            });
+            component.props = props;
+          }
+        } catch (e) {
+          // Angular APIs may not be available
+        }
+        return component;
+      }
+
+      return component;
+    }
+
+    function sanitizeValue(value, depth) {
+      if (depth <= 0) return '[max depth]';
+      if (value === null) return null;
+      if (value === undefined) return undefined;
+
+      var type = typeof value;
+      if (type === 'string') {
+        return value.length > 200 ? value.substring(0, 200) + '...' : value;
+      }
+      if (type === 'number' || type === 'boolean') {
+        return value;
+      }
+      if (type === 'function') {
+        return '[Function: ' + (value.name || 'anonymous') + ']';
+      }
+      if (value instanceof Date) {
+        return value.toISOString();
+      }
+      if (value instanceof Element) {
+        return '[Element: ' + value.tagName.toLowerCase() + ']';
+      }
+      if (Array.isArray(value)) {
+        if (value.length > 10) {
+          return '[Array(' + value.length + ')]';
+        }
+        return value.slice(0, 10).map(function(v) {
+          return sanitizeValue(v, depth - 1);
+        });
+      }
+      if (type === 'object') {
+        return sanitizeObject(value, depth - 1);
+      }
+      return String(value);
+    }
+
+    function sanitizeObject(obj, depth) {
+      if (depth <= 0) return '[max depth]';
+      if (!obj || typeof obj !== 'object') return obj;
+
+      var result = {};
+      var keys = Object.keys(obj);
+      if (keys.length > 20) {
+        keys = keys.slice(0, 20);
+        result['...'] = '(' + (Object.keys(obj).length - 20) + ' more keys)';
+      }
+
+      keys.forEach(function(key) {
+        if (key.startsWith('__') || key.startsWith('$$')) return;
+        try {
+          result[key] = sanitizeValue(obj[key], depth);
+        } catch (e) {
+          result[key] = '[Error reading property]';
+        }
+      });
+
+      return result;
+    }
+
+    function getDataAttributes(el) {
+      var attrs = {};
+      for (var i = 0; i < el.attributes.length; i++) {
+        var attr = el.attributes[i];
+        if (attr.name.startsWith('data-')) {
+          attrs[attr.name] = attr.value;
+        }
+      }
+      return attrs;
+    }
+
+    function getEventListenerTypes(el) {
+      var listeners = [];
+      try {
+        if (typeof getEventListeners === 'function') {
+          var elListeners = getEventListeners(el);
+          listeners = Object.keys(elListeners);
+        }
+      } catch (e) {
+        // getEventListeners only available in DevTools console
+      }
+      return listeners;
+    }
+
+    // Read captured console/network logs from page context
+    function readCapturedLogs() {
+      return {
+        consoleErrors: window.__AI_CONTEXT_CONSOLE_LOG__ || [],
+        networkRequests: window.__AI_CONTEXT_NETWORK_LOG__ || []
+      };
     }
 
     // ========== MODAL ==========
@@ -575,7 +865,15 @@ export default defineContentScript({
           tagName: currentElementData.tagName,
           elementId: currentElementData.elementId,
           textContent: currentElementData.textContent
-        }
+        },
+        // Phase 1 enhanced fields
+        framework: currentElementData.framework,
+        component: currentElementData.component,
+        dataAttributes: currentElementData.dataAttributes,
+        eventListeners: currentElementData.eventListeners,
+        consoleErrors: currentElementData.consoleErrors,
+        networkRequests: currentElementData.networkRequests,
+        developerContext: currentElementData.developerContext
       };
 
       chrome.runtime.sendMessage({

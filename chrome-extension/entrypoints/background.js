@@ -169,6 +169,25 @@ export default defineBackground(() => {
     if (projectName) {
       lines.push('**Project:** ' + projectName);
     }
+
+    // Framework info (Phase 1)
+    if (report.framework && report.framework.name) {
+      var frameworkStr = report.framework.name;
+      if (report.framework.version) {
+        frameworkStr += ' ' + report.framework.version;
+      }
+      lines.push('**Framework:** ' + frameworkStr);
+    }
+
+    // Component info (Phase 1)
+    if (report.component && report.component.name) {
+      var componentStr = report.component.name;
+      if (report.component.file) {
+        componentStr += ' (' + report.component.file + ')';
+      }
+      lines.push('**Component:** ' + componentStr);
+    }
+
     lines.push('**Page URL:** ' + (report.url || ''));
     lines.push('**Captured:** ' + new Date().toLocaleString());
     lines.push('');
@@ -208,6 +227,94 @@ export default defineBackground(() => {
         lines.push('```');
         lines.push('');
       }
+    }
+
+    // Component Props (Phase 1)
+    if (report.component && report.component.props && Object.keys(report.component.props).length > 0) {
+      lines.push('## Component Props');
+      lines.push('');
+      lines.push('```json');
+      lines.push(JSON.stringify(report.component.props, null, 2));
+      lines.push('```');
+      lines.push('');
+    }
+
+    // Component State (Phase 1)
+    if (report.component && report.component.state && Object.keys(report.component.state).length > 0) {
+      lines.push('## Component State');
+      lines.push('');
+      lines.push('```json');
+      lines.push(JSON.stringify(report.component.state, null, 2));
+      lines.push('```');
+      lines.push('');
+    }
+
+    // Data Attributes (Phase 1)
+    if (report.dataAttributes && Object.keys(report.dataAttributes).length > 0) {
+      lines.push('## Data Attributes');
+      lines.push('');
+      Object.keys(report.dataAttributes).forEach(function(key) {
+        lines.push('- `' + key + '`: `' + report.dataAttributes[key] + '`');
+      });
+      lines.push('');
+    }
+
+    // Event Listeners (Phase 1)
+    if (report.eventListeners && report.eventListeners.length > 0) {
+      lines.push('## Event Listeners');
+      lines.push('');
+      lines.push(report.eventListeners.map(function(e) { return '`' + e + '`'; }).join(', '));
+      lines.push('');
+    }
+
+    // Console Errors (Phase 1)
+    if (report.consoleErrors && report.consoleErrors.length > 0) {
+      lines.push('## Recent Console Errors');
+      lines.push('');
+      report.consoleErrors.forEach(function(entry) {
+        var typeLabel = entry.type === 'error' ? 'ERROR' : 'WARN';
+        var time = new Date(entry.timestamp).toLocaleTimeString();
+        lines.push('```');
+        lines.push('[' + typeLabel + ' ' + time + '] ' + entry.message);
+        if (entry.stack) {
+          lines.push('');
+          // Limit stack trace length
+          var stackLines = entry.stack.split('\n').slice(0, 5);
+          lines.push(stackLines.join('\n'));
+        }
+        lines.push('```');
+        lines.push('');
+      });
+    }
+
+    // Network Requests (Phase 1)
+    if (report.networkRequests && report.networkRequests.length > 0) {
+      lines.push('## Recent Network Activity');
+      lines.push('');
+      lines.push('| Method | URL | Status | Duration |');
+      lines.push('|--------|-----|--------|----------|');
+      report.networkRequests.forEach(function(req) {
+        var url = req.url;
+        // Truncate long URLs
+        if (url.length > 60) {
+          url = url.substring(0, 57) + '...';
+        }
+        var status = req.status || 0;
+        var statusStr = req.failed ? '**' + status + '**' : String(status);
+        var duration = req.duration ? req.duration + 'ms' : '-';
+        lines.push('| ' + (req.method || 'GET') + ' | `' + url + '` | ' + statusStr + ' | ' + duration + ' |');
+      });
+      lines.push('');
+    }
+
+    // Developer Context (Phase 1 - SDK integration)
+    if (report.developerContext) {
+      lines.push('## Developer Context');
+      lines.push('');
+      lines.push('```json');
+      lines.push(JSON.stringify(report.developerContext, null, 2));
+      lines.push('```');
+      lines.push('');
     }
 
     return lines.join('\n');

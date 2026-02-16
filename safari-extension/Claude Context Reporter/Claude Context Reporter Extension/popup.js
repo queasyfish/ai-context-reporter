@@ -1,4 +1,4 @@
-// AI Context Reporter - Popup Script
+// AI Context Reporter - Safari Popup Script
 // Manages the reports list, copy, delete, export, and drag-drop functionality
 
 "use strict";
@@ -13,11 +13,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const exportAllBtn = document.getElementById("export-all-btn");
   const clearBtn = document.getElementById("clear-btn");
   const template = document.getElementById("report-template");
-  const footer = document.getElementById("footer");
   const dragHint = document.getElementById("drag-hint");
   const reportsView = document.getElementById("reports-view");
   const settingsView = document.getElementById("settings-view");
-  const reportsActions = document.getElementById("reports-actions");
+  const reportsBadge = document.getElementById("reports-badge");
 
   // Verify required elements exist
   if (!reportsList || !emptyState || !template) {
@@ -34,7 +33,7 @@ document.addEventListener("DOMContentLoaded", () => {
   loadReports();
 
   // Tab switching
-  document.querySelectorAll(".header-tab").forEach(tab => {
+  document.querySelectorAll(".tab-btn").forEach(tab => {
     tab.addEventListener("click", () => {
       const viewName = tab.dataset.view;
       switchView(viewName);
@@ -43,22 +42,27 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function switchView(viewName) {
     // Update tab styles
-    document.querySelectorAll(".header-tab").forEach(t => {
+    document.querySelectorAll(".tab-btn").forEach(t => {
       t.classList.toggle("active", t.dataset.view === viewName);
     });
 
     // Show/hide views
-    if (reportsView) reportsView.classList.toggle("hidden", viewName !== "reports");
-    if (settingsView) settingsView.classList.toggle("hidden", viewName !== "settings");
-
-    // Show/hide reports-specific actions
-    if (reportsActions) reportsActions.classList.toggle("hidden", viewName !== "reports");
+    if (reportsView) reportsView.classList.toggle("active", viewName === "reports");
+    if (settingsView) settingsView.classList.toggle("active", viewName === "settings");
 
     // Load content for the view
     if (viewName === "reports") {
       loadReports();
     } else if (viewName === "settings") {
       loadMappings();
+    }
+  }
+
+  // Update reports badge
+  function updateReportsBadge(count) {
+    if (reportsBadge) {
+      reportsBadge.textContent = count;
+      reportsBadge.style.display = count > 0 ? "inline-block" : "none";
     }
   }
 
@@ -88,7 +92,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       }
 
-      showToast(`Exported ${exportedCount} report${exportedCount !== 1 ? 's' : ''} to Downloads/${EXPORT_FOLDER}/`);
+      showToast(`Exported ${exportedCount} report${exportedCount !== 1 ? "s" : ""} to Downloads/${BASE_EXPORT_FOLDER}/`);
     } catch (error) {
       console.error("Export all error:", error);
       showToast("Export failed", true);
@@ -120,20 +124,21 @@ document.addEventListener("DOMContentLoaded", () => {
       const reports = Array.isArray(response?.reports) ? response.reports : [];
       reportsCache = reports;
 
+      // Update badge
+      updateReportsBadge(reports.length);
+
       // Clear existing content
       reportsList.innerHTML = "";
 
       if (reports.length === 0) {
         emptyState.classList.remove("hidden");
         reportsList.classList.add("hidden");
-        if (footer) footer.classList.add("hidden");
         if (dragHint) dragHint.classList.add("hidden");
         return;
       }
 
       emptyState.classList.add("hidden");
       reportsList.classList.remove("hidden");
-      if (footer) footer.classList.remove("hidden");
       if (dragHint) dragHint.classList.remove("hidden");
 
       // Use document fragment for better performance
@@ -204,7 +209,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Export button
-    const exportBtn = item.querySelector(".btn-export");
+    const exportBtn = item.querySelector(".export-btn");
     if (exportBtn) {
       exportBtn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -213,7 +218,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Copy button
-    const copyBtn = item.querySelector(".btn-copy");
+    const copyBtn = item.querySelector(".copy-btn");
     if (copyBtn) {
       copyBtn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -222,7 +227,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // Delete button
-    const deleteBtn = item.querySelector(".btn-delete");
+    const deleteBtn = item.querySelector(".delete-btn");
     if (deleteBtn) {
       deleteBtn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -439,7 +444,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Truncate string
   function truncate(str, maxLength) {
     if (!str || str.length <= maxLength) return str || "";
-    return str.substring(0, maxLength) + "…";
+    return str.substring(0, maxLength) + "...";
   }
 
   // Copy report as Markdown
@@ -476,6 +481,25 @@ document.addEventListener("DOMContentLoaded", () => {
     if (projectName) {
       lines.push(`**Project:** ${escapeMarkdown(projectName)}`);
     }
+
+    // Phase 1: Framework info
+    if (report.framework && report.framework.name) {
+      let frameworkStr = report.framework.name;
+      if (report.framework.version) {
+        frameworkStr += " " + report.framework.version;
+      }
+      lines.push(`**Framework:** ${frameworkStr}`);
+    }
+
+    // Phase 1: Component info
+    if (report.component && report.component.name) {
+      let componentStr = report.component.name;
+      if (report.component.file) {
+        componentStr += ` (${report.component.file})`;
+      }
+      lines.push(`**Component:** ${componentStr}`);
+    }
+
     lines.push(`**Page:** ${escapeMarkdown(report.pageTitle || "Untitled")}`);
     lines.push(`**URL:** ${report.pageUrl || ""}`);
     lines.push(`**Captured:** ${formatTimestamp(report.timestamp)}`);
@@ -531,7 +555,85 @@ document.addEventListener("DOMContentLoaded", () => {
       lines.push("## Bounding Box");
       lines.push("");
       lines.push(`- **Position:** (${r.left ?? 0}, ${r.top ?? 0})`);
-      lines.push(`- **Size:** ${r.width ?? 0} × ${r.height ?? 0}px`);
+      lines.push(`- **Size:** ${r.width ?? 0} x ${r.height ?? 0}px`);
+      lines.push("");
+    }
+
+    // Phase 1: Component Props
+    if (report.component && report.component.props && Object.keys(report.component.props).length > 0) {
+      lines.push("## Component Props");
+      lines.push("");
+      lines.push("```json");
+      lines.push(JSON.stringify(report.component.props, null, 2));
+      lines.push("```");
+      lines.push("");
+    }
+
+    // Phase 1: Component State
+    if (report.component && report.component.state && Object.keys(report.component.state).length > 0) {
+      lines.push("## Component State");
+      lines.push("");
+      lines.push("```json");
+      lines.push(JSON.stringify(report.component.state, null, 2));
+      lines.push("```");
+      lines.push("");
+    }
+
+    // Phase 1: Data Attributes
+    if (report.dataAttributes && Object.keys(report.dataAttributes).length > 0) {
+      lines.push("## Data Attributes");
+      lines.push("");
+      for (const [key, value] of Object.entries(report.dataAttributes)) {
+        lines.push(`- \`${key}\`: \`${value}\``);
+      }
+      lines.push("");
+    }
+
+    // Phase 1: Console Errors
+    if (report.consoleErrors && report.consoleErrors.length > 0) {
+      lines.push("## Recent Console Errors");
+      lines.push("");
+      for (const entry of report.consoleErrors) {
+        const typeLabel = entry.type === "error" ? "ERROR" : "WARN";
+        const time = entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : "";
+        lines.push("```");
+        lines.push(`[${typeLabel} ${time}] ${entry.message}`);
+        if (entry.stack) {
+          lines.push("");
+          const stackLines = entry.stack.split("\n").slice(0, 5);
+          lines.push(stackLines.join("\n"));
+        }
+        lines.push("```");
+        lines.push("");
+      }
+    }
+
+    // Phase 1: Network Requests
+    if (report.networkRequests && report.networkRequests.length > 0) {
+      lines.push("## Recent Network Activity");
+      lines.push("");
+      lines.push("| Method | URL | Status | Duration |");
+      lines.push("|--------|-----|--------|----------|");
+      for (const req of report.networkRequests) {
+        let url = req.url || "";
+        if (url.length > 60) {
+          url = url.substring(0, 57) + "...";
+        }
+        const status = req.status || 0;
+        const statusStr = req.failed ? `**${status}**` : String(status);
+        const duration = req.duration ? `${req.duration}ms` : "-";
+        lines.push(`| ${req.method || "GET"} | \`${url}\` | ${statusStr} | ${duration} |`);
+      }
+      lines.push("");
+    }
+
+    // Phase 1: Developer Context
+    if (report.developerContext) {
+      lines.push("## Developer Context");
+      lines.push("");
+      lines.push("```json");
+      lines.push(JSON.stringify(report.developerContext, null, 2));
+      lines.push("```");
       lines.push("");
     }
 
@@ -562,7 +664,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const toast = document.createElement("div");
     toast.className = "export-toast";
     if (isError) {
-      toast.style.background = "#dc2626";
+      toast.classList.add("error");
     }
     toast.textContent = message;
     document.body.appendChild(toast);
@@ -595,7 +697,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!container) return;
 
     if (mappings.length === 0) {
-      container.innerHTML = '<p class="empty-state-small">No project mappings configured.</p>';
+      container.innerHTML = '<p class="empty-state-small">No project mappings configured</p>';
       return;
     }
 
@@ -612,7 +714,7 @@ document.addEventListener("DOMContentLoaded", () => {
             </div>
           </div>
           <span class="mapping-patterns">${escapeHtml(patternsDisplay)}${moreCount}</span>
-          <span class="mapping-folder">→ ai-agent-reports/${escapeHtml(mapping.folder)}/</span>
+          <span class="mapping-folder">-> ai-agent-reports/${escapeHtml(mapping.folder)}/</span>
         </div>
       `;
     }).join("");

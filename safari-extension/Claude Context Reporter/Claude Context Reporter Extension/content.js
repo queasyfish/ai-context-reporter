@@ -1,5 +1,6 @@
 // AI Context Reporter - Content Script
 // Handles element picking, data extraction, and capture modal
+// Includes Phase 1 enhancements: framework detection, console/network capture
 
 (function() {
   "use strict";
@@ -14,6 +15,8 @@
   const MAX_HTML_LENGTH = 1000;
   const MAX_ATTR_LENGTH = 200;
   const MAX_SELECTOR_DEPTH = 10;
+  const MAX_CONSOLE_ENTRIES = 50;
+  const MAX_NETWORK_ENTRIES = 50;
 
   // State
   let pickerActive = false;
@@ -23,6 +26,207 @@
   let captureModal = null;
   let lastMouseMoveTime = 0;
   let pendingMouseMove = null;
+
+  // ========== PHASE 1: Console and Network Capture ==========
+
+  // Initialize console capture
+  function initConsoleCapture() {
+    if (window.__AI_CONTEXT_CONSOLE_INITIALIZED__) return;
+    window.__AI_CONTEXT_CONSOLE_INITIALIZED__ = true;
+    window.__AI_CONTEXT_CONSOLE_LOG__ = [];
+
+    const originalError = console.error;
+    const originalWarn = console.warn;
+
+    function captureEntry(type, args) {
+      const message = Array.from(args).map(arg => {
+        if (arg === null) return 'null';
+        if (arg === undefined) return 'undefined';
+        if (typeof arg === 'string') return arg;
+        if (arg instanceof Error) return arg.name + ': ' + arg.message;
+        try {
+          const str = JSON.stringify(arg);
+          return str.length > 500 ? str.substring(0, 500) + '...' : str;
+        } catch (e) {
+          return String(arg);
+        }
+      }).join(' ').substring(0, 2000);
+
+      let stack = null;
+      try {
+        const err = new Error();
+        if (err.stack) {
+          stack = err.stack.split('\n').slice(3).join('\n').substring(0, 3000);
+        }
+      } catch (e) {}
+
+      if (args.length > 0 && args[0] instanceof Error && args[0].stack) {
+        stack = args[0].stack.substring(0, 3000);
+      }
+
+      window.__AI_CONTEXT_CONSOLE_LOG__.push({
+        type,
+        message,
+        stack,
+        timestamp: Date.now(),
+        url: location.href
+      });
+
+      if (window.__AI_CONTEXT_CONSOLE_LOG__.length > MAX_CONSOLE_ENTRIES) {
+        window.__AI_CONTEXT_CONSOLE_LOG__.shift();
+      }
+    }
+
+    console.error = function() {
+      captureEntry('error', arguments);
+      return originalError.apply(console, arguments);
+    };
+
+    console.warn = function() {
+      captureEntry('warn', arguments);
+      return originalWarn.apply(console, arguments);
+    };
+
+    window.addEventListener('error', function(event) {
+      window.__AI_CONTEXT_CONSOLE_LOG__.push({
+        type: 'error',
+        message: event.message || 'Unknown error',
+        stack: event.error ? event.error.stack : null,
+        timestamp: Date.now(),
+        url: location.href,
+        source: event.filename,
+        line: event.lineno
+      });
+      if (window.__AI_CONTEXT_CONSOLE_LOG__.length > MAX_CONSOLE_ENTRIES) {
+        window.__AI_CONTEXT_CONSOLE_LOG__.shift();
+      }
+    });
+
+    window.addEventListener('unhandledrejection', function(event) {
+      let message = 'Unhandled Promise Rejection';
+      let stack = null;
+      if (event.reason) {
+        if (event.reason instanceof Error) {
+          message = event.reason.message || message;
+          stack = event.reason.stack;
+        } else if (typeof event.reason === 'string') {
+          message = event.reason;
+        }
+      }
+      window.__AI_CONTEXT_CONSOLE_LOG__.push({
+        type: 'error',
+        message: '[Promise] ' + message,
+        stack,
+        timestamp: Date.now(),
+        url: location.href
+      });
+      if (window.__AI_CONTEXT_CONSOLE_LOG__.length > MAX_CONSOLE_ENTRIES) {
+        window.__AI_CONTEXT_CONSOLE_LOG__.shift();
+      }
+    });
+  }
+
+  // Initialize network capture
+  function initNetworkCapture() {
+    if (window.__AI_CONTEXT_NETWORK_INITIALIZED__) return;
+    window.__AI_CONTEXT_NETWORK_INITIALIZED__ = true;
+    window.__AI_CONTEXT_NETWORK_LOG__ = [];
+
+    let requestIdCounter = 0;
+
+    function addNetworkEntry(entry) {
+      if (entry.url && entry.url.length > 500) {
+        entry.url = entry.url.substring(0, 500) + '...';
+      }
+      window.__AI_CONTEXT_NETWORK_LOG__.push(entry);
+      if (window.__AI_CONTEXT_NETWORK_LOG__.length > MAX_NETWORK_ENTRIES) {
+        window.__AI_CONTEXT_NETWORK_LOG__.shift();
+      }
+    }
+
+    // Patch fetch
+    const originalFetch = window.fetch;
+    window.fetch = function(input, init) {
+      const startTime = performance.now();
+      let url = '';
+      let method = 'GET';
+
+      if (typeof input === 'string') {
+        url = input;
+      } else if (input instanceof Request) {
+        url = input.url;
+        method = input.method;
+      } else if (input && input.toString) {
+        url = input.toString();
+      }
+
+      if (init && init.method) {
+        method = init.method;
+      }
+
+      return originalFetch.apply(this, arguments)
+        .then(function(response) {
+          addNetworkEntry({
+            url,
+            method: method.toUpperCase(),
+            status: response.status,
+            statusText: response.statusText,
+            duration: Math.round(performance.now() - startTime),
+            failed: !response.ok,
+            type: 'fetch',
+            timestamp: Date.now()
+          });
+          return response;
+        })
+        .catch(function(error) {
+          addNetworkEntry({
+            url,
+            method: method.toUpperCase(),
+            status: 0,
+            statusText: error.message || 'Network Error',
+            duration: Math.round(performance.now() - startTime),
+            failed: true,
+            type: 'fetch',
+            timestamp: Date.now()
+          });
+          throw error;
+        });
+    };
+
+    // Patch XMLHttpRequest
+    const XHROpen = XMLHttpRequest.prototype.open;
+    const XHRSend = XMLHttpRequest.prototype.send;
+
+    XMLHttpRequest.prototype.open = function(method, url) {
+      this._aiContextMethod = method ? method.toUpperCase() : 'GET';
+      this._aiContextUrl = url;
+      return XHROpen.apply(this, arguments);
+    };
+
+    XMLHttpRequest.prototype.send = function(body) {
+      const xhr = this;
+      const startTime = performance.now();
+
+      xhr.addEventListener('loadend', function() {
+        addNetworkEntry({
+          url: xhr._aiContextUrl,
+          method: xhr._aiContextMethod,
+          status: xhr.status,
+          statusText: xhr.statusText,
+          duration: Math.round(performance.now() - startTime),
+          failed: xhr.status === 0 || xhr.status >= 400,
+          type: 'xhr',
+          timestamp: Date.now()
+        });
+      });
+
+      return XHRSend.apply(this, arguments);
+    };
+  }
+
+  // Initialize captures on load
+  initConsoleCapture();
+  initNetworkCapture();
 
   // Styles for picker UI
   const HIGHLIGHT_STYLE = `
@@ -540,6 +744,213 @@
     document.removeEventListener("keydown", onModalKeyDown);
   }
 
+  // ========== PHASE 1: Framework Detection ==========
+
+  function detectFramework() {
+    // React detection
+    if (window.React || window.__REACT_DEVTOOLS_GLOBAL_HOOK__) {
+      let version = null;
+      if (window.React && window.React.version) {
+        version = window.React.version;
+      } else if (window.__REACT_DEVTOOLS_GLOBAL_HOOK__ && window.__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers) {
+        const renderers = window.__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers;
+        if (renderers.size > 0) {
+          const firstRenderer = renderers.values().next().value;
+          if (firstRenderer && firstRenderer.version) {
+            version = firstRenderer.version;
+          }
+        }
+      }
+      return { name: 'react', version };
+    }
+
+    // Vue detection
+    if (window.Vue) {
+      return { name: 'vue', version: window.Vue.version || null };
+    }
+    if (window.__VUE__) {
+      return { name: 'vue', version: '3.x' };
+    }
+
+    // Angular detection
+    if (window.ng || window.getAllAngularRootElements) {
+      let version = null;
+      if (window.ng && window.ng.VERSION) {
+        version = window.ng.VERSION.full || window.ng.VERSION.major + '.' + window.ng.VERSION.minor;
+      } else if (document.querySelector('[ng-version]')) {
+        version = document.querySelector('[ng-version]').getAttribute('ng-version');
+      }
+      return { name: 'angular', version };
+    }
+
+    // Svelte detection
+    if (document.querySelector('[class*="svelte-"]') || window.__svelte) {
+      return { name: 'svelte', version: null };
+    }
+
+    // Check for framework indicators in DOM
+    if (document.querySelector('[data-reactroot], [data-reactid]')) {
+      return { name: 'react', version: null };
+    }
+    if (document.querySelector('[data-v-]') || document.querySelector('[v-cloak]')) {
+      return { name: 'vue', version: null };
+    }
+    if (document.querySelector('[_ngcontent-]') || document.querySelector('[ng-reflect-]')) {
+      return { name: 'angular', version: null };
+    }
+
+    return { name: null, version: null };
+  }
+
+  function getComponentInfo(el) {
+    const component = { name: null, props: null, state: null, file: null };
+
+    // React component extraction
+    const fiberKey = Object.keys(el).find(k =>
+      k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$')
+    );
+
+    if (fiberKey) {
+      let fiber = el[fiberKey];
+      let current = fiber;
+      while (current) {
+        if (current.type && typeof current.type === 'function') {
+          component.name = current.type.displayName || current.type.name || 'Anonymous';
+          if (current.memoizedProps) {
+            component.props = sanitizeObjectForReport(current.memoizedProps, 2);
+          }
+          if (current.memoizedState && current.tag === 1) {
+            component.state = sanitizeObjectForReport(current.memoizedState, 2);
+          }
+          if (current._debugSource) {
+            component.file = current._debugSource.fileName;
+          }
+          break;
+        }
+        current = current.return;
+      }
+      return component;
+    }
+
+    // Vue 3 component extraction
+    if (el.__vueParentComponent) {
+      const vc = el.__vueParentComponent;
+      component.name = vc.type && (vc.type.name || vc.type.__name) || 'Anonymous';
+      if (vc.props) {
+        component.props = sanitizeObjectForReport(vc.props, 2);
+      }
+      if (vc.setupState) {
+        component.state = sanitizeObjectForReport(vc.setupState, 2);
+      }
+      if (vc.type && vc.type.__file) {
+        component.file = vc.type.__file;
+      }
+      return component;
+    }
+
+    // Vue 2 component extraction
+    if (el.__vue__) {
+      const vm = el.__vue__;
+      component.name = vm.$options && (vm.$options.name || vm.$options._componentTag) || 'Anonymous';
+      if (vm.$props) {
+        component.props = sanitizeObjectForReport(vm.$props, 2);
+      }
+      if (vm.$data) {
+        component.state = sanitizeObjectForReport(vm.$data, 2);
+      }
+      if (vm.$options && vm.$options.__file) {
+        component.file = vm.$options.__file;
+      }
+      return component;
+    }
+
+    // Angular component extraction
+    if (window.ng && window.ng.getComponent) {
+      try {
+        const ngComponent = window.ng.getComponent(el);
+        if (ngComponent) {
+          component.name = ngComponent.constructor.name || 'Anonymous';
+          const props = {};
+          Object.getOwnPropertyNames(ngComponent).forEach(key => {
+            if (!key.startsWith('_') && typeof ngComponent[key] !== 'function') {
+              props[key] = sanitizeValueForReport(ngComponent[key], 2);
+            }
+          });
+          component.props = props;
+        }
+      } catch (e) {}
+    }
+
+    return component;
+  }
+
+  function sanitizeValueForReport(value, depth) {
+    if (depth <= 0) return '[max depth]';
+    if (value === null) return null;
+    if (value === undefined) return undefined;
+
+    const type = typeof value;
+    if (type === 'string') {
+      return value.length > 200 ? value.substring(0, 200) + '...' : value;
+    }
+    if (type === 'number' || type === 'boolean') {
+      return value;
+    }
+    if (type === 'function') {
+      return '[Function: ' + (value.name || 'anonymous') + ']';
+    }
+    if (value instanceof Date) {
+      return value.toISOString();
+    }
+    if (value instanceof Element) {
+      return '[Element: ' + value.tagName.toLowerCase() + ']';
+    }
+    if (Array.isArray(value)) {
+      if (value.length > 10) {
+        return '[Array(' + value.length + ')]';
+      }
+      return value.slice(0, 10).map(v => sanitizeValueForReport(v, depth - 1));
+    }
+    if (type === 'object') {
+      return sanitizeObjectForReport(value, depth - 1);
+    }
+    return String(value);
+  }
+
+  function sanitizeObjectForReport(obj, depth) {
+    if (depth <= 0) return '[max depth]';
+    if (!obj || typeof obj !== 'object') return obj;
+
+    const result = {};
+    let keys = Object.keys(obj);
+    if (keys.length > 20) {
+      keys = keys.slice(0, 20);
+      result['...'] = '(' + (Object.keys(obj).length - 20) + ' more keys)';
+    }
+
+    keys.forEach(key => {
+      if (key.startsWith('__') || key.startsWith('$$')) return;
+      try {
+        result[key] = sanitizeValueForReport(obj[key], depth);
+      } catch (e) {
+        result[key] = '[Error reading property]';
+      }
+    });
+
+    return result;
+  }
+
+  function getDataAttributesFromElement(el) {
+    const attrs = {};
+    for (let i = 0; i < el.attributes.length; i++) {
+      const attr = el.attributes[i];
+      if (attr.name.startsWith('data-') && !attr.name.startsWith('data-ccr')) {
+        attrs[attr.name] = attr.value;
+      }
+    }
+    return attrs;
+  }
+
   // Extract element data with comprehensive error handling
   function extractElementData(element) {
     const data = {
@@ -554,7 +965,14 @@
       computedStyles: {},
       boundingRect: null,
       pageUrl: "",
-      pageTitle: ""
+      pageTitle: "",
+      // Phase 1 fields
+      framework: null,
+      component: null,
+      dataAttributes: {},
+      consoleErrors: [],
+      networkRequests: [],
+      developerContext: null
     };
 
     try {
@@ -609,6 +1027,43 @@
     try {
       data.pageUrl = window.location.href;
       data.pageTitle = document.title || "";
+    } catch { /* ignore */ }
+
+    // Phase 1: Framework detection
+    try {
+      data.framework = detectFramework();
+    } catch { /* ignore */ }
+
+    // Phase 1: Component info
+    try {
+      data.component = getComponentInfo(element);
+    } catch { /* ignore */ }
+
+    // Phase 1: Data attributes
+    try {
+      data.dataAttributes = getDataAttributesFromElement(element);
+      // Check for developer-provided context
+      if (data.dataAttributes['data-ai-context']) {
+        try {
+          data.developerContext = JSON.parse(data.dataAttributes['data-ai-context']);
+          if (data.developerContext.component && !data.component.name) {
+            data.component.name = data.developerContext.component;
+          }
+          if (data.developerContext.file) {
+            data.component.file = data.developerContext.file;
+          }
+        } catch { /* invalid JSON */ }
+      }
+    } catch { /* ignore */ }
+
+    // Phase 1: Console errors
+    try {
+      data.consoleErrors = (window.__AI_CONTEXT_CONSOLE_LOG__ || []).slice(-10);
+    } catch { /* ignore */ }
+
+    // Phase 1: Network requests
+    try {
+      data.networkRequests = (window.__AI_CONTEXT_NETWORK_LOG__ || []).slice(-20);
     } catch { /* ignore */ }
 
     return data;
