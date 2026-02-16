@@ -5,6 +5,11 @@
  * browser extension. Install this SDK to give AI agents better information
  * about your components, file paths, and application state.
  *
+ * NOTE: The sanitization logic here mirrors chrome-extension/lib/shared-utils.js
+ * but with more generous limits, since the SDK is explicitly used by developers
+ * who want to expose more context. The extension uses tighter limits to keep
+ * auto-captured reports manageable.
+ *
  * @example
  * ```js
  * import { AIContextReporter } from 'ai-context-sdk';
@@ -20,6 +25,14 @@
  * });
  * ```
  */
+
+// SDK-specific limits (more generous than extension's shared-utils.js)
+// These allow developers to share richer context when using the SDK
+const SDK_MAX_STRING_LENGTH = 1000;
+const SDK_MAX_OBJECT_DEPTH = 3;
+const SDK_MAX_OBJECT_KEYS = 50;
+const SDK_MAX_ARRAY_LENGTH = 100;
+const SDK_MAX_SNAPSHOTS = 50;
 
 /**
  * @typedef {Object} AIContextConfig
@@ -72,7 +85,7 @@ class AIContextReporter {
     this.components = new Map();
     this.stateSnapshots = [];
     this.customContext = {};
-    this.maxSnapshots = 50;
+    this.maxSnapshots = SDK_MAX_SNAPSHOTS;
 
     // Expose globally for extension detection
     if (typeof window !== 'undefined') {
@@ -202,7 +215,7 @@ class AIContextReporter {
   captureState(name, value) {
     const snapshot = {
       name,
-      value: this._sanitizeValue(value, 3),
+      value: this._sanitizeValue(value, SDK_MAX_OBJECT_DEPTH),
       timestamp: Date.now()
     };
 
@@ -246,7 +259,7 @@ class AIContextReporter {
    * ```
    */
   setContext(key, value) {
-    this.customContext[key] = this._sanitizeValue(value, 3);
+    this.customContext[key] = this._sanitizeValue(value, SDK_MAX_OBJECT_DEPTH);
     return this;
   }
 
@@ -287,9 +300,10 @@ class AIContextReporter {
 
   /**
    * Sanitize a value for safe serialization.
+   * Mirrors shared-utils.js sanitizeValue but with SDK-specific limits.
    * @private
    */
-  _sanitizeValue(value, depth) {
+  _sanitizeValue(value, depth = SDK_MAX_OBJECT_DEPTH) {
     if (depth <= 0) return '[max depth]';
     if (value === null) return null;
     if (value === undefined) return undefined;
@@ -297,7 +311,9 @@ class AIContextReporter {
     const type = typeof value;
 
     if (type === 'string') {
-      return value.length > 1000 ? value.substring(0, 1000) + '...' : value;
+      return value.length > SDK_MAX_STRING_LENGTH
+        ? value.substring(0, SDK_MAX_STRING_LENGTH) + '...'
+        : value;
     }
     if (type === 'number' || type === 'boolean') {
       return value;
@@ -312,16 +328,18 @@ class AIContextReporter {
       return value.toString();
     }
     if (value instanceof Error) {
+      // SDK returns more detail for errors than shared-utils
       return { name: value.name, message: value.message, stack: value.stack };
     }
+    // SSR compatibility: check if Element exists before instanceof
     if (typeof Element !== 'undefined' && value instanceof Element) {
       return '[Element: ' + value.tagName.toLowerCase() + ']';
     }
     if (Array.isArray(value)) {
-      if (value.length > 100) {
+      if (value.length > SDK_MAX_ARRAY_LENGTH) {
         return '[Array(' + value.length + ')]';
       }
-      return value.slice(0, 100).map(v => this._sanitizeValue(v, depth - 1));
+      return value.slice(0, SDK_MAX_ARRAY_LENGTH).map(v => this._sanitizeValue(v, depth - 1));
     }
     if (type === 'object') {
       return this._sanitizeObject(value, depth - 1);
@@ -332,23 +350,24 @@ class AIContextReporter {
 
   /**
    * Sanitize an object for safe serialization.
+   * Mirrors shared-utils.js sanitizeObject but with SDK-specific limits.
    * @private
    */
-  _sanitizeObject(obj, depth) {
+  _sanitizeObject(obj, depth = SDK_MAX_OBJECT_DEPTH) {
     if (depth <= 0) return '[max depth]';
     if (!obj || typeof obj !== 'object') return obj;
 
     const result = {};
     let keys = Object.keys(obj);
 
-    // Limit number of keys
-    if (keys.length > 50) {
-      keys = keys.slice(0, 50);
-      result['...'] = '(' + (Object.keys(obj).length - 50) + ' more keys)';
+    // Limit number of keys (SDK allows more than shared-utils)
+    if (keys.length > SDK_MAX_OBJECT_KEYS) {
+      keys = keys.slice(0, SDK_MAX_OBJECT_KEYS);
+      result['...'] = '(' + (Object.keys(obj).length - SDK_MAX_OBJECT_KEYS) + ' more keys)';
     }
 
     for (const key of keys) {
-      // Skip internal/private keys
+      // Skip internal/private keys (SDK also skips single underscore prefix)
       if (key.startsWith('__') || key.startsWith('$$') || key.startsWith('_')) {
         continue;
       }

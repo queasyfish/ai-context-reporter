@@ -36,6 +36,16 @@ document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll(".tab-btn").forEach(tab => {
     tab.addEventListener("click", () => {
       const viewName = tab.dataset.view;
+
+      // Handle Deep Inspection button - opens in new tab
+      if (viewName === "inspect") {
+        browser.tabs.create({
+          url: browser.runtime.getURL("inspector.html")
+        });
+        window.close(); // Close the popup
+        return;
+      }
+
       switchView(viewName);
     });
   });

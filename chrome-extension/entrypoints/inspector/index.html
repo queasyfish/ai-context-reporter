@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Deep Inspection - AI Context Reporter</title>
+    <style>
+      :root {
+        --bg-primary: #ffffff;
+        --bg-secondary: #f8f9fa;
+        --bg-tertiary: #f1f3f4;
+        --bg-hover: #e8eaed;
+        --text-primary: #202124;
+        --text-secondary: #5f6368;
+        --text-muted: #80868b;
+        --border-color: #dadce0;
+        --accent: #1a73e8;
+        --accent-hover: #1557b0;
+        --accent-light: #e8f0fe;
+        --success: #1e8e3e;
+        --success-light: #e6f4ea;
+        --danger: #d93025;
+        --danger-light: #fce8e6;
+        --warning: #f9ab00;
+        --warning-light: #fef7e0;
+        --radius: 8px;
+        --radius-sm: 4px;
+        --shadow: 0 1px 3px rgba(0,0,0,0.1);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg-primary: #202124;
+          --bg-secondary: #292a2d;
+          --bg-tertiary: #35363a;
+          --bg-hover: #3c4043;
+          --text-primary: #e8eaed;
+          --text-secondary: #9aa0a6;
+          --text-muted: #80868b;
+          --border-color: #3c4043;
+          --accent: #8ab4f8;
+          --accent-hover: #aecbfa;
+          --accent-light: #394457;
+          --success: #81c995;
+          --success-light: #2d3b30;
+          --danger: #f28b82;
+          --danger-light: #3c2a2a;
+          --warning: #fdd663;
+          --warning-light: #3d3523;
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      body {
+        font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+        font-size: 13px;
+        color: var(--text-primary);
+        background: var(--bg-primary);
+        line-height: 1.4;
+        padding: 12px;
+        min-width: 320px;
+      }
+
+      /* Header */
+      .header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 16px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid var(--border-color);
+      }
+
+      .header-icon {
+        width: 24px;
+        height: 24px;
+        color: var(--accent);
+      }
+
+      .header-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text-primary);
+      }
+
+      .header-subtitle {
+        font-size: 11px;
+        color: var(--text-muted);
+      }
+
+      /* Recording Status */
+      .recording-status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius);
+        margin-bottom: 12px;
+      }
+
+      .recording-status.active {
+        background: var(--danger-light);
+        border-color: var(--danger);
+      }
+
+      .recording-indicator {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--text-muted);
+      }
+
+      .recording-status.active .recording-indicator {
+        background: var(--danger);
+        animation: pulse 1.5s ease-in-out infinite;
+      }
+
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+
+      .recording-text {
+        flex: 1;
+        font-size: 12px;
+        font-weight: 500;
+      }
+
+      .recording-duration {
+        font-family: 'SF Mono', Monaco, Consolas, monospace;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-secondary);
+      }
+
+      .recording-status.active .recording-duration {
+        color: var(--danger);
+      }
+
+      /* Controls */
+      .controls {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+
+      .control-btn {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 10px 16px;
+        border: none;
+        border-radius: var(--radius);
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+
+      .control-btn svg {
+        width: 16px;
+        height: 16px;
+      }
+
+      .start-btn {
+        background: var(--success);
+        color: white;
+      }
+
+      .start-btn:hover:not(:disabled) {
+        filter: brightness(0.9);
+      }
+
+      .stop-btn {
+        background: var(--danger);
+        color: white;
+      }
+
+      .stop-btn:hover:not(:disabled) {
+        filter: brightness(0.9);
+      }
+
+      .snapshot-btn {
+        background: var(--accent-light);
+        color: var(--accent);
+      }
+
+      .snapshot-btn:hover:not(:disabled) {
+        background: var(--accent);
+        color: white;
+      }
+
+      .control-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      /* Stats Grid */
+      .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+
+      .stat-card {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-sm);
+        padding: 10px 8px;
+        text-align: center;
+      }
+
+      .stat-value {
+        font-size: 18px;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin-bottom: 2px;
+      }
+
+      .stat-label {
+        font-size: 10px;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      /* Timeline */
+      .timeline-section {
+        margin-bottom: 16px;
+      }
+
+      .section-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 8px;
+      }
+
+      .section-title {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-secondary);
+      }
+
+      .section-badge {
+        background: var(--bg-tertiary);
+        padding: 2px 6px;
+        border-radius: 10px;
+        font-size: 10px;
+        font-weight: 600;
+        color: var(--text-muted);
+      }
+
+      .timeline {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius);
+        max-height: 200px;
+        overflow-y: auto;
+      }
+
+      .timeline-empty {
+        padding: 20px;
+        text-align: center;
+        color: var(--text-muted);
+        font-size: 12px;
+      }
+
+      .timeline-entry {
+        display: flex;
+        gap: 10px;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--border-color);
+      }
+
+      .timeline-entry:last-child {
+        border-bottom: none;
+      }
+
+      .timeline-time {
+        font-family: 'SF Mono', Monaco, Consolas, monospace;
+        font-size: 10px;
+        color: var(--text-muted);
+        min-width: 45px;
+      }
+
+      .timeline-icon {
+        width: 16px;
+        height: 16px;
+        flex-shrink: 0;
+      }
+
+      .timeline-icon.click { color: var(--accent); }
+      .timeline-icon.input { color: #9334e6; }
+      .timeline-icon.scroll { color: var(--text-muted); }
+      .timeline-icon.navigation { color: var(--success); }
+      .timeline-icon.error { color: var(--danger); }
+      .timeline-icon.network { color: var(--warning); }
+      .timeline-icon.snapshot { color: var(--accent); }
+
+      .timeline-content {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .timeline-label {
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--text-primary);
+      }
+
+      .timeline-detail {
+        font-size: 10px;
+        color: var(--text-muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      /* Comment Section */
+      .comment-section {
+        margin-bottom: 12px;
+      }
+
+      .comment-label {
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--text-secondary);
+        margin-bottom: 6px;
+        display: block;
+      }
+
+      .comment-textarea {
+        width: 100%;
+        min-height: 60px;
+        padding: 10px 12px;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius);
+        background: var(--bg-primary);
+        color: var(--text-primary);
+        font-family: inherit;
+        font-size: 13px;
+        resize: vertical;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      }
+
+      .comment-textarea:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 2px var(--accent-light);
+      }
+
+      .comment-textarea::placeholder {
+        color: var(--text-muted);
+      }
+
+      /* Export Section */
+      .export-section {
+        display: flex;
+        gap: 8px;
+      }
+
+      .export-btn {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 10px 16px;
+        border: none;
+        border-radius: var(--radius);
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+
+      .export-btn svg {
+        width: 16px;
+        height: 16px;
+      }
+
+      .export-md-btn {
+        background: var(--accent);
+        color: white;
+      }
+
+      .export-md-btn:hover:not(:disabled) {
+        background: var(--accent-hover);
+      }
+
+      .copy-btn {
+        background: var(--bg-tertiary);
+        color: var(--text-primary);
+        border: 1px solid var(--border-color);
+      }
+
+      .copy-btn:hover:not(:disabled) {
+        background: var(--bg-hover);
+      }
+
+      .export-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      /* Feedback */
+      .feedback {
+        text-align: center;
+        font-size: 11px;
+        margin-top: 8px;
+        min-height: 16px;
+      }
+
+      .feedback.success { color: var(--success); }
+      .feedback.error { color: var(--danger); }
+
+      /* Snapshot Dialog */
+      dialog {
+        padding: 0;
+        border: none;
+        border-radius: var(--radius);
+        background: var(--bg-primary);
+        box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+        max-width: 300px;
+        width: 90%;
+      }
+
+      dialog::backdrop {
+        background: rgba(0,0,0,0.4);
+      }
+
+      .dialog-header {
+        padding: 16px;
+        border-bottom: 1px solid var(--border-color);
+      }
+
+      .dialog-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text-primary);
+      }
+
+      .dialog-body {
+        padding: 16px;
+      }
+
+      .dialog-footer {
+        padding: 12px 16px;
+        border-top: 1px solid var(--border-color);
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      .form-group {
+        margin-bottom: 0;
+      }
+
+      .form-label {
+        display: block;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text-secondary);
+        margin-bottom: 6px;
+      }
+
+      .form-input {
+        width: 100%;
+        padding: 8px 10px;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-sm);
+        background: var(--bg-primary);
+        color: var(--text-primary);
+        font-family: inherit;
+        font-size: 12px;
+        transition: border-color 0.15s ease;
+      }
+
+      .form-input:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+
+      .dialog-btn {
+        padding: 8px 16px;
+        border-radius: var(--radius-sm);
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+
+      .dialog-btn-secondary {
+        background: var(--bg-tertiary);
+        color: var(--text-primary);
+        border: none;
+      }
+
+      .dialog-btn-secondary:hover {
+        background: var(--bg-hover);
+      }
+
+      .dialog-btn-primary {
+        background: var(--accent);
+        color: white;
+        border: none;
+      }
+
+      .dialog-btn-primary:hover {
+        background: var(--accent-hover);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <svg class="header-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/>
+        <polygon points="10 8 16 12 10 16 10 8"/>
+      </svg>
+      <div>
+        <div class="header-title">Deep Inspection Mode</div>
+        <div class="header-subtitle">Record interactions and events</div>
+      </div>
+    </div>
+
+    <div id="recording-status" class="recording-status">
+      <div class="recording-indicator"></div>
+      <span class="recording-text">Not Recording</span>
+      <span id="recording-duration" class="recording-duration">00:00</span>
+    </div>
+
+    <div class="controls">
+      <button id="start-btn" class="control-btn start-btn">
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <circle cx="12" cy="12" r="10"/>
+        </svg>
+        Start
+      </button>
+      <button id="stop-btn" class="control-btn stop-btn" disabled>
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <rect x="6" y="6" width="12" height="12" rx="2"/>
+        </svg>
+        Stop
+      </button>
+      <button id="snapshot-btn" class="control-btn snapshot-btn" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+          <circle cx="12" cy="13" r="4"/>
+        </svg>
+        Snapshot
+      </button>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div id="stat-interactions" class="stat-value">0</div>
+        <div class="stat-label">Clicks</div>
+      </div>
+      <div class="stat-card">
+        <div id="stat-console" class="stat-value">0</div>
+        <div class="stat-label">Console</div>
+      </div>
+      <div class="stat-card">
+        <div id="stat-network" class="stat-value">0</div>
+        <div class="stat-label">Network</div>
+      </div>
+      <div class="stat-card">
+        <div id="stat-snapshots" class="stat-value">0</div>
+        <div class="stat-label">Snapshots</div>
+      </div>
+    </div>
+
+    <div class="timeline-section">
+      <div class="section-header">
+        <span class="section-title">Timeline</span>
+        <span id="timeline-badge" class="section-badge">0 events</span>
+      </div>
+      <div id="timeline" class="timeline">
+        <div class="timeline-empty">Start recording to capture events</div>
+      </div>
+    </div>
+
+    <div class="comment-section">
+      <label class="comment-label" for="comment-input">Session Notes</label>
+      <textarea
+        id="comment-input"
+        class="comment-textarea"
+        placeholder="Describe what you were testing or the issue you encountered..."
+      ></textarea>
+    </div>
+
+    <div class="export-section">
+      <button id="export-md-btn" class="export-btn export-md-btn" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        Export Session
+      </button>
+      <button id="copy-btn" class="export-btn copy-btn" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+        </svg>
+        Copy
+      </button>
+    </div>
+
+    <div id="feedback" class="feedback"></div>
+
+    <!-- Snapshot Label Dialog -->
+    <dialog id="snapshot-dialog">
+      <div class="dialog-header">
+        <h3 class="dialog-title">Take Snapshot</h3>
+      </div>
+      <form method="dialog" id="snapshot-form">
+        <div class="dialog-body">
+          <div class="form-group">
+            <label class="form-label" for="snapshot-label">Snapshot Label</label>
+            <input type="text" id="snapshot-label" class="form-input" placeholder="e.g., Before submit, Error state">
+          </div>
+        </div>
+        <div class="dialog-footer">
+          <button type="button" class="dialog-btn dialog-btn-secondary" id="snapshot-cancel">Cancel</button>
+          <button type="submit" class="dialog-btn dialog-btn-primary">Take Snapshot</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

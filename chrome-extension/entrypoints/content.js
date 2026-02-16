@@ -6,8 +6,19 @@
  * Captures framework info, console errors, and network requests.
  */
 
-import { getConsoleInjectorCode, getConsoleLogReaderCode } from '../lib/console-capture.js';
-import { getNetworkInjectorCode, getNetworkLogReaderCode } from '../lib/network-capture.js';
+import { getConsoleInjectorCode } from '../lib/console-capture.js';
+import { getNetworkInjectorCode } from '../lib/network-capture.js';
+import {
+  sanitizeValue,
+  sanitizeObject,
+  getCssSelector,
+  getXPath,
+  getComputedStyles,
+  getElementId,
+  getTextContent,
+  getDataAttributes,
+  getEventListenerTypes
+} from '../lib/shared-utils.js';
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -229,143 +240,6 @@ export default defineContentScript({
       };
     }
 
-    function getCssSelector(el) {
-      if (!el || el.nodeType !== Node.ELEMENT_NODE) return '';
-
-      var path = [];
-      var current = el;
-
-      while (current && current.nodeType === Node.ELEMENT_NODE) {
-        var selector = current.tagName.toLowerCase();
-
-        if (current.id) {
-          selector += '#' + current.id;
-        }
-
-        if (current.className && typeof current.className === 'string') {
-          var classes = current.className.trim().split(/\s+/).filter(function(c) { return c; });
-          if (classes.length > 0) {
-            selector += '.' + classes.join('.');
-          }
-        }
-
-        if (current.parentElement) {
-          var siblings = [];
-          var child = current.parentElement.firstElementChild;
-          while (child) {
-            if (child.tagName === current.tagName) {
-              siblings.push(child);
-            }
-            child = child.nextElementSibling;
-          }
-          if (siblings.length > 1) {
-            var index = siblings.indexOf(current) + 1;
-            selector += ':nth-of-type(' + index + ')';
-          }
-        }
-
-        path.unshift(selector);
-        current = current.parentElement;
-      }
-
-      return path.join(' > ');
-    }
-
-    function getXPath(el) {
-      if (!el || el.nodeType !== Node.ELEMENT_NODE) return '';
-
-      var path = [];
-      var current = el;
-
-      while (current && current.nodeType === Node.ELEMENT_NODE) {
-        var tagName = current.tagName.toLowerCase();
-        var index = 1;
-        var sibling = current.previousElementSibling;
-        while (sibling) {
-          if (sibling.tagName === current.tagName) {
-            index++;
-          }
-          sibling = sibling.previousElementSibling;
-        }
-
-        var attrs = '';
-        if (current.id) {
-          attrs += '[@id="' + current.id + '"]';
-        }
-        if (current.className && typeof current.className === 'string') {
-          var classStr = current.className.trim();
-          if (classStr) {
-            attrs += '[@class="' + classStr + '"]';
-          }
-        }
-
-        path.unshift(tagName + attrs + '[' + index + ']');
-        current = current.parentElement;
-      }
-
-      return '/' + path.join('/');
-    }
-
-    function getComputedStyles(el) {
-      var computed = window.getComputedStyle(el);
-      var properties = [
-        'display', 'position', 'float', 'clear',
-        'width', 'height', 'min-width', 'max-width', 'min-height', 'max-height',
-        'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
-        'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
-        'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width',
-        'font-family', 'font-size', 'font-weight', 'line-height', 'text-align',
-        'color', 'background-color', 'opacity', 'visibility',
-        'flex-direction', 'justify-content', 'align-items'
-      ];
-
-      var result = {};
-      for (var i = 0; i < properties.length; i++) {
-        var prop = properties[i];
-        result[prop] = computed.getPropertyValue(prop);
-      }
-      return result;
-    }
-
-    function getElementId(el) {
-      var tag = el.tagName.toLowerCase();
-      var identifier = tag;
-
-      if (el.id) {
-        identifier += '#' + el.id;
-      } else if (el.className && typeof el.className === 'string') {
-        var firstClass = el.className.trim().split(/\s+/)[0];
-        if (firstClass) {
-          identifier += '.' + firstClass;
-        }
-      }
-
-      return identifier;
-    }
-
-    function getTextContent(el) {
-      var textContent = '';
-      for (var i = 0; i < el.childNodes.length; i++) {
-        if (el.childNodes[i].nodeType === Node.TEXT_NODE) {
-          textContent += el.childNodes[i].textContent;
-        }
-      }
-      textContent = textContent.trim();
-
-      if (!textContent && el.innerText) {
-        textContent = el.innerText.trim();
-      }
-
-      if (textContent) {
-        textContent = textContent.replace(/\s+/g, ' ').substring(0, 30);
-        if (el.innerText && el.innerText.trim().length > 30) {
-          textContent += '...';
-        }
-      }
-
-      return textContent;
-    }
-
     // ========== FRAMEWORK DETECTION ==========
 
     function detectFramework() {
@@ -507,88 +381,6 @@ export default defineContentScript({
       }
 
       return component;
-    }
-
-    function sanitizeValue(value, depth) {
-      if (depth <= 0) return '[max depth]';
-      if (value === null) return null;
-      if (value === undefined) return undefined;
-
-      var type = typeof value;
-      if (type === 'string') {
-        return value.length > 200 ? value.substring(0, 200) + '...' : value;
-      }
-      if (type === 'number' || type === 'boolean') {
-        return value;
-      }
-      if (type === 'function') {
-        return '[Function: ' + (value.name || 'anonymous') + ']';
-      }
-      if (value instanceof Date) {
-        return value.toISOString();
-      }
-      if (value instanceof Element) {
-        return '[Element: ' + value.tagName.toLowerCase() + ']';
-      }
-      if (Array.isArray(value)) {
-        if (value.length > 10) {
-          return '[Array(' + value.length + ')]';
-        }
-        return value.slice(0, 10).map(function(v) {
-          return sanitizeValue(v, depth - 1);
-        });
-      }
-      if (type === 'object') {
-        return sanitizeObject(value, depth - 1);
-      }
-      return String(value);
-    }
-
-    function sanitizeObject(obj, depth) {
-      if (depth <= 0) return '[max depth]';
-      if (!obj || typeof obj !== 'object') return obj;
-
-      var result = {};
-      var keys = Object.keys(obj);
-      if (keys.length > 20) {
-        keys = keys.slice(0, 20);
-        result['...'] = '(' + (Object.keys(obj).length - 20) + ' more keys)';
-      }
-
-      keys.forEach(function(key) {
-        if (key.startsWith('__') || key.startsWith('$$')) return;
-        try {
-          result[key] = sanitizeValue(obj[key], depth);
-        } catch (e) {
-          result[key] = '[Error reading property]';
-        }
-      });
-
-      return result;
-    }
-
-    function getDataAttributes(el) {
-      var attrs = {};
-      for (var i = 0; i < el.attributes.length; i++) {
-        var attr = el.attributes[i];
-        if (attr.name.startsWith('data-')) {
-          attrs[attr.name] = attr.value;
-        }
-      }
-      return attrs;
-    }
-
-    function getEventListenerTypes(el) {
-      var listeners = [];
-      try {
-        if (typeof getEventListeners === 'function') {
-          var elListeners = getEventListeners(el);
-          listeners = Object.keys(elListeners);
-        }
-      } catch (e) {
-        // getEventListeners only available in DevTools console
-      }
-      return listeners;
     }
 
     // Read captured console/network logs from page context

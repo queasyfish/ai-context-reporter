@@ -8,6 +8,8 @@
  * or directly in the page context.
  */
 
+import { getSanitizationCode } from './shared-utils.js';
+
 /**
  * Returns an eval-ready code string that detects the framework
  * and extracts component information from the selected element ($0).
@@ -308,75 +310,10 @@ export function getFrameworkDetectorCode() {
         }
 
         // =========================================
-        // Utility Functions
+        // Utility Functions (injected from shared-utils)
         // =========================================
 
-        function sanitizeValue(value, depth) {
-          if (depth <= 0) return '[max depth]';
-
-          if (value === null) return null;
-          if (value === undefined) return undefined;
-
-          var type = typeof value;
-
-          if (type === 'string') {
-            return value.length > 200 ? value.substring(0, 200) + '...' : value;
-          }
-          if (type === 'number' || type === 'boolean') {
-            return value;
-          }
-          if (type === 'function') {
-            return '[Function: ' + (value.name || 'anonymous') + ']';
-          }
-          if (value instanceof Date) {
-            return value.toISOString();
-          }
-          if (value instanceof RegExp) {
-            return value.toString();
-          }
-          if (value instanceof Element) {
-            return '[Element: ' + value.tagName.toLowerCase() + ']';
-          }
-          if (Array.isArray(value)) {
-            if (value.length > 10) {
-              return '[Array(' + value.length + ')]';
-            }
-            return value.slice(0, 10).map(function(v) {
-              return sanitizeValue(v, depth - 1);
-            });
-          }
-          if (type === 'object') {
-            return sanitizeObject(value, depth - 1);
-          }
-
-          return String(value);
-        }
-
-        function sanitizeObject(obj, depth) {
-          if (depth <= 0) return '[max depth]';
-          if (!obj || typeof obj !== 'object') return obj;
-
-          var result = {};
-          var keys = Object.keys(obj);
-
-          // Limit number of keys to prevent huge objects
-          if (keys.length > 20) {
-            keys = keys.slice(0, 20);
-            result['...'] = '(' + (Object.keys(obj).length - 20) + ' more keys)';
-          }
-
-          keys.forEach(function(key) {
-            // Skip React internal keys and functions
-            if (key.startsWith('__') || key.startsWith('$$')) return;
-            try {
-              result[key] = sanitizeValue(obj[key], depth);
-            } catch (e) {
-              result[key] = '[Error reading property]';
-            }
-          });
-
-          return result;
-        }
+        ${getSanitizationCode()}
 
         // Extract component based on detected framework
         if (result.framework.name === 'react') {

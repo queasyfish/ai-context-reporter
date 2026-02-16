@@ -467,6 +467,393 @@
     return div.innerHTML;
   }
 
+  // ========== PHASE 3: Session Recording ==========
+
+  // Session state
+  let sessionState = {
+    isRecording: false,
+    sessionId: null,
+    startTime: null,
+    consoleLog: [],
+    networkLog: [],
+    interactions: [],
+    snapshots: []
+  };
+
+  const MAX_SESSION_CONSOLE = 200;
+  const MAX_SESSION_NETWORK = 100;
+  const MAX_SESSION_INTERACTIONS = 500;
+  const MAX_SESSION_BODY_LENGTH = 5000;
+
+  // Initialize session recording (patches console/network for session capture)
+  function initSessionRecording() {
+    if (window.__AI_CONTEXT_SESSION_INITIALIZED__) return;
+    window.__AI_CONTEXT_SESSION_INITIALIZED__ = true;
+
+    // Store original console methods
+    const originalConsole = {
+      log: console.log,
+      warn: console.warn,
+      error: console.error,
+      info: console.info,
+      debug: console.debug
+    };
+
+    function formatArgs(args) {
+      return Array.from(args).map(arg => {
+        if (arg === null) return 'null';
+        if (arg === undefined) return 'undefined';
+        if (typeof arg === 'string') return arg;
+        if (arg instanceof Error) return arg.name + ': ' + arg.message;
+        try {
+          const str = JSON.stringify(arg, null, 2);
+          return str && str.length > 1000 ? str.substring(0, 1000) + '...' : str;
+        } catch (e) {
+          return String(arg);
+        }
+      }).join(' ');
+    }
+
+    function captureSessionConsole(type, args) {
+      if (!sessionState.isRecording) return;
+
+      const message = formatArgs(args);
+      let stack = null;
+
+      try {
+        const err = new Error();
+        if (err.stack) {
+          stack = err.stack.split('\n').slice(3, 8).join('\n');
+        }
+      } catch (e) {}
+
+      if (args.length > 0 && args[0] instanceof Error && args[0].stack) {
+        stack = args[0].stack;
+      }
+
+      sessionState.consoleLog.push({
+        type: type,
+        message: message.substring(0, 2000),
+        stack: stack ? stack.substring(0, 1000) : null,
+        timestamp: Date.now()
+      });
+
+      if (sessionState.consoleLog.length > MAX_SESSION_CONSOLE) {
+        sessionState.consoleLog.shift();
+      }
+    }
+
+    // Patch console methods for session recording
+    ['log', 'warn', 'error', 'info', 'debug'].forEach(type => {
+      const original = originalConsole[type];
+      console[type] = function() {
+        captureSessionConsole(type, arguments);
+        return original.apply(console, arguments);
+      };
+    });
+
+    // Capture unhandled errors during session
+    window.addEventListener('error', function(event) {
+      if (!sessionState.isRecording) return;
+      sessionState.consoleLog.push({
+        type: 'error',
+        message: event.message || 'Unknown error',
+        stack: event.error ? event.error.stack : null,
+        timestamp: Date.now(),
+        source: event.filename,
+        line: event.lineno
+      });
+    });
+
+    // Capture unhandled promise rejections during session
+    window.addEventListener('unhandledrejection', function(event) {
+      if (!sessionState.isRecording) return;
+      let message = 'Unhandled Promise Rejection';
+      let stack = null;
+      if (event.reason) {
+        if (event.reason instanceof Error) {
+          message = event.reason.message || message;
+          stack = event.reason.stack;
+        } else if (typeof event.reason === 'string') {
+          message = event.reason;
+        }
+      }
+      sessionState.consoleLog.push({
+        type: 'error',
+        message: '[Promise] ' + message,
+        stack: stack,
+        timestamp: Date.now()
+      });
+    });
+
+    // Enhanced network capture for sessions (with request/response bodies)
+    const sessionOriginalFetch = window.fetch;
+    window.fetch = function(input, init) {
+      if (!sessionState.isRecording) {
+        return sessionOriginalFetch.apply(this, arguments);
+      }
+
+      const startTime = Date.now();
+      let url = typeof input === 'string' ? input : (input.url || String(input));
+      let method = (init && init.method) || (input.method) || 'GET';
+      let requestBody = null;
+
+      if (init && init.body) {
+        try {
+          requestBody = typeof init.body === 'string'
+            ? init.body.substring(0, MAX_SESSION_BODY_LENGTH)
+            : '[Binary/FormData]';
+        } catch (e) {
+          requestBody = '[Unable to capture]';
+        }
+      }
+
+      return sessionOriginalFetch.apply(this, arguments)
+        .then(function(response) {
+          const clonedResponse = response.clone();
+          const entry = {
+            url: url.substring(0, 500),
+            method: method.toUpperCase(),
+            status: response.status,
+            requestBody: requestBody,
+            responseBody: null,
+            duration: Date.now() - startTime,
+            timestamp: startTime,
+            failed: !response.ok
+          };
+
+          // Try to capture response body
+          clonedResponse.text().then(function(text) {
+            entry.responseBody = text.substring(0, MAX_SESSION_BODY_LENGTH);
+          }).catch(function() {});
+
+          sessionState.networkLog.push(entry);
+          if (sessionState.networkLog.length > MAX_SESSION_NETWORK) {
+            sessionState.networkLog.shift();
+          }
+
+          return response;
+        })
+        .catch(function(error) {
+          sessionState.networkLog.push({
+            url: url.substring(0, 500),
+            method: method.toUpperCase(),
+            status: 0,
+            requestBody: requestBody,
+            responseBody: null,
+            duration: Date.now() - startTime,
+            timestamp: startTime,
+            failed: true,
+            error: error.message
+          });
+          throw error;
+        });
+    };
+
+    // Enhanced XHR capture for sessions
+    const sessionXHROpen = XMLHttpRequest.prototype.open;
+    const sessionXHRSend = XMLHttpRequest.prototype.send;
+
+    XMLHttpRequest.prototype.open = function(method, url) {
+      this._sessionMethod = method;
+      this._sessionUrl = url;
+      return sessionXHROpen.apply(this, arguments);
+    };
+
+    XMLHttpRequest.prototype.send = function(body) {
+      const xhr = this;
+      if (!sessionState.isRecording) {
+        return sessionXHRSend.apply(this, arguments);
+      }
+
+      const startTime = Date.now();
+      let requestBody = null;
+
+      if (body) {
+        try {
+          requestBody = typeof body === 'string'
+            ? body.substring(0, MAX_SESSION_BODY_LENGTH)
+            : '[Binary/FormData]';
+        } catch (e) {}
+      }
+
+      xhr.addEventListener('loadend', function() {
+        let responseBody = null;
+        try {
+          responseBody = xhr.responseText
+            ? xhr.responseText.substring(0, MAX_SESSION_BODY_LENGTH)
+            : null;
+        } catch (e) {}
+
+        sessionState.networkLog.push({
+          url: (xhr._sessionUrl || '').substring(0, 500),
+          method: (xhr._sessionMethod || 'GET').toUpperCase(),
+          status: xhr.status,
+          requestBody: requestBody,
+          responseBody: responseBody,
+          duration: Date.now() - startTime,
+          timestamp: startTime,
+          failed: xhr.status === 0 || xhr.status >= 400
+        });
+
+        if (sessionState.networkLog.length > MAX_SESSION_NETWORK) {
+          sessionState.networkLog.shift();
+        }
+      });
+
+      return sessionXHRSend.apply(this, arguments);
+    };
+
+    // Capture user interactions during session
+    function captureInteraction(type, event) {
+      if (!sessionState.isRecording) return;
+
+      let target = '';
+      try {
+        const el = event.target;
+        if (el && el.tagName) {
+          const tag = el.tagName.toLowerCase();
+          const id = el.id ? '#' + el.id : '';
+          const className = el.className && typeof el.className === 'string'
+            ? '.' + el.className.trim().split(/\s+/).slice(0, 2).join('.')
+            : '';
+          target = tag + id + className;
+        }
+      } catch (e) {}
+
+      const interaction = {
+        type: type,
+        target: target.substring(0, 100),
+        timestamp: Date.now()
+      };
+
+      // Capture input value for input events
+      if (type === 'input' && event.target) {
+        try {
+          const value = event.target.value || '';
+          interaction.value = value.substring(0, 50) + (value.length > 50 ? '...' : '');
+        } catch (e) {}
+      }
+
+      sessionState.interactions.push(interaction);
+      if (sessionState.interactions.length > MAX_SESSION_INTERACTIONS) {
+        sessionState.interactions.shift();
+      }
+    }
+
+    // Add interaction event listeners
+    document.addEventListener('click', e => captureInteraction('click', e), true);
+    document.addEventListener('input', e => captureInteraction('input', e), true);
+    document.addEventListener('submit', e => captureInteraction('submit', e), true);
+    document.addEventListener('scroll', (() => {
+      let lastScroll = 0;
+      return function(e) {
+        const now = Date.now();
+        if (now - lastScroll > 500) { // Debounce scroll events
+          captureInteraction('scroll', e);
+          lastScroll = now;
+        }
+      };
+    })(), true);
+  }
+
+  // Start session recording
+  function startSession() {
+    initSessionRecording();
+
+    const sessionId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+    sessionState = {
+      isRecording: true,
+      sessionId: sessionId,
+      startTime: Date.now(),
+      consoleLog: [],
+      networkLog: [],
+      interactions: [],
+      snapshots: []
+    };
+
+    console.info('[AI Context] Recording session started: ' + sessionId);
+    return { success: true, sessionId: sessionId };
+  }
+
+  // Stop session recording
+  function stopSession() {
+    sessionState.isRecording = false;
+    const endTime = Date.now();
+
+    const session = {
+      sessionId: sessionState.sessionId,
+      startTime: sessionState.startTime,
+      endTime: endTime,
+      duration: endTime - sessionState.startTime,
+      consoleLog: sessionState.consoleLog,
+      networkLog: sessionState.networkLog,
+      interactions: sessionState.interactions,
+      snapshots: sessionState.snapshots
+    };
+
+    console.info('[AI Context] Recording session stopped');
+    return { success: true, session: session };
+  }
+
+  // Take a snapshot
+  function takeSnapshot(label) {
+    if (!sessionState.isRecording) {
+      return { success: false, error: 'Not recording' };
+    }
+
+    const snapshot = {
+      label: label || 'Snapshot ' + (sessionState.snapshots.length + 1),
+      timestamp: Date.now(),
+      url: location.href,
+      localStorage: {},
+      sessionStorage: {}
+    };
+
+    // Capture localStorage
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        const value = localStorage.getItem(key);
+        if (value && value.length < 1000) {
+          snapshot.localStorage[key] = value;
+        }
+      }
+    } catch (e) {}
+
+    // Capture sessionStorage
+    try {
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        const value = sessionStorage.getItem(key);
+        if (value && value.length < 1000) {
+          snapshot.sessionStorage[key] = value;
+        }
+      }
+    } catch (e) {}
+
+    sessionState.snapshots.push(snapshot);
+    console.info('[AI Context] Snapshot taken: ' + snapshot.label);
+    return { success: true, snapshot: snapshot };
+  }
+
+  // Get session status
+  function getSessionStatus() {
+    return {
+      success: true,
+      status: {
+        isRecording: sessionState.isRecording,
+        sessionId: sessionState.sessionId,
+        startTime: sessionState.startTime,
+        duration: sessionState.isRecording ? Date.now() - sessionState.startTime : 0,
+        consoleCount: sessionState.consoleLog.length,
+        networkCount: sessionState.networkLog.length,
+        interactionCount: sessionState.interactions.length,
+        snapshotCount: sessionState.snapshots.length
+      }
+    };
+  }
+
   // Listen for messages from background script
   browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === "startPicker") {
@@ -475,6 +862,34 @@
         sendResponse({ success: true });
       } catch (error) {
         console.error("Failed to start picker:", error);
+        sendResponse({ success: false, error: error.message });
+      }
+    } else if (message.action === "startSession") {
+      try {
+        sendResponse(startSession());
+      } catch (error) {
+        console.error("Failed to start session:", error);
+        sendResponse({ success: false, error: error.message });
+      }
+    } else if (message.action === "stopSession") {
+      try {
+        sendResponse(stopSession());
+      } catch (error) {
+        console.error("Failed to stop session:", error);
+        sendResponse({ success: false, error: error.message });
+      }
+    } else if (message.action === "takeSnapshot") {
+      try {
+        sendResponse(takeSnapshot(message.label));
+      } catch (error) {
+        console.error("Failed to take snapshot:", error);
+        sendResponse({ success: false, error: error.message });
+      }
+    } else if (message.action === "getSessionStatus") {
+      try {
+        sendResponse(getSessionStatus());
+      } catch (error) {
+        console.error("Failed to get session status:", error);
         sendResponse({ success: false, error: error.message });
       }
     }
