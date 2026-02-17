@@ -19,6 +19,10 @@
 		EXT006 /* popup.js in Resources */ = {isa = PBXBuildFile; fileRef = EXTRES005 /* popup.js */; };
 		EXT007 /* popup.css in Resources */ = {isa = PBXBuildFile; fileRef = EXTRES006 /* popup.css */; };
 		EXT008 /* images in Resources */ = {isa = PBXBuildFile; fileRef = EXTRES007 /* images */; };
+		EXT009 /* shared-utils.js in Resources */ = {isa = PBXBuildFile; fileRef = EXTRES008 /* shared-utils.js */; };
+		EXT010 /* shared-constants.js in Resources */ = {isa = PBXBuildFile; fileRef = EXTRES009 /* shared-constants.js */; };
+		EXT011 /* inspector.html in Resources */ = {isa = PBXBuildFile; fileRef = EXTRES010 /* inspector.html */; };
+		EXT012 /* inspector.js in Resources */ = {isa = PBXBuildFile; fileRef = EXTRES011 /* inspector.js */; };
 		EMBED001 /* Claude Context Reporter Extension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = PROD002 /* Claude Context Reporter Extension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
@@ -61,6 +65,10 @@
 		EXTRES005 /* popup.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = popup.js; sourceTree = "<group>"; };
 		EXTRES006 /* popup.css */ = {isa = PBXFileReference; lastKnownFileType = text.css; path = popup.css; sourceTree = "<group>"; };
 		EXTRES007 /* images */ = {isa = PBXFileReference; lastKnownFileType = folder; path = images; sourceTree = "<group>"; };
+		EXTRES008 /* shared-utils.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "shared-utils.js"; sourceTree = "<group>"; };
+		EXTRES009 /* shared-constants.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = "shared-constants.js"; sourceTree = "<group>"; };
+		EXTRES010 /* inspector.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = inspector.html; sourceTree = "<group>"; };
+		EXTRES011 /* inspector.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = inspector.js; sourceTree = "<group>"; };
 		PLIST001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		PLIST002 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		ENT001 /* Claude Context Reporter.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "Claude Context Reporter.entitlements"; sourceTree = "<group>"; };
@@ -118,6 +126,10 @@
 				EXTRES005 /* popup.js */,
 				EXTRES006 /* popup.css */,
 				EXTRES007 /* images */,
+				EXTRES008 /* shared-utils.js */,
+				EXTRES009 /* shared-constants.js */,
+				EXTRES010 /* inspector.html */,
+				EXTRES011 /* inspector.js */,
 				PLIST002 /* Info.plist */,
 				ENT002 /* Claude Context Reporter Extension.entitlements */,
 			);
@@ -230,6 +242,10 @@
 				EXT006 /* popup.js in Resources */,
 				EXT007 /* popup.css in Resources */,
 				EXT008 /* images in Resources */,
+				EXT009 /* shared-utils.js in Resources */,
+				EXT010 /* shared-constants.js in Resources */,
+				EXT011 /* inspector.html in Resources */,
+				EXT012 /* inspector.js in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

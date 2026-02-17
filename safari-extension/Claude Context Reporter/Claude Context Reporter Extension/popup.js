@@ -334,12 +334,24 @@ document.addEventListener("DOMContentLoaded", () => {
 
     try {
       // Use downloads API to save to specific folder
-      await browser.downloads.download({
+      // Note: Safari may not support all options, so we use minimal options
+      const downloadOptions = {
         url: url,
-        filename: filepath,
-        saveAs: false,
-        conflictAction: "uniquify"
-      });
+        filename: filepath
+      };
+
+      // Only add optional parameters if supported (Safari compatibility)
+      try {
+        await browser.downloads.download({
+          ...downloadOptions,
+          saveAs: false,
+          conflictAction: "uniquify"
+        });
+      } catch (optionsError) {
+        // Fallback: try with minimal options for Safari
+        console.warn("Download with full options failed, trying minimal:", optionsError);
+        await browser.downloads.download(downloadOptions);
+      }
       return exportInfo;
     } finally {
       // Clean up blob URL

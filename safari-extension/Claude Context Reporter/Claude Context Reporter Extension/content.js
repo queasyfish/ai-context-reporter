@@ -1162,21 +1162,54 @@
   // ========== PHASE 1: Framework Detection ==========
 
   function detectFramework() {
-    // React detection
-    if (window.React || window.__REACT_DEVTOOLS_GLOBAL_HOOK__) {
+    // React detection - check multiple methods
+    // Method 1: Check for React DevTools hook (most reliable when DevTools installed)
+    if (window.__REACT_DEVTOOLS_GLOBAL_HOOK__) {
       let version = null;
-      if (window.React && window.React.version) {
-        version = window.React.version;
-      } else if (window.__REACT_DEVTOOLS_GLOBAL_HOOK__ && window.__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers) {
-        const renderers = window.__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers;
-        if (renderers.size > 0) {
-          const firstRenderer = renderers.values().next().value;
-          if (firstRenderer && firstRenderer.version) {
-            version = firstRenderer.version;
-          }
+      const renderers = window.__REACT_DEVTOOLS_GLOBAL_HOOK__.renderers;
+      if (renderers && renderers.size > 0) {
+        const firstRenderer = renderers.values().next().value;
+        if (firstRenderer && firstRenderer.version) {
+          version = firstRenderer.version;
         }
       }
       return { name: 'react', version };
+    }
+
+    // Method 2: Check for React on window (older apps or exposed React)
+    if (window.React && window.React.version) {
+      return { name: 'react', version: window.React.version };
+    }
+
+    // Method 3: Check for React fiber keys on root element (works for bundled React)
+    const rootElement = document.getElementById('root') || document.getElementById('app') || document.body.firstElementChild;
+    if (rootElement) {
+      const hasFiber = Object.keys(rootElement).some(k =>
+        k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$') || k.startsWith('__reactContainer$')
+      );
+      if (hasFiber) {
+        return { name: 'react', version: null };
+      }
+    }
+
+    // Method 4: Check for data-reactroot attribute
+    if (document.querySelector('[data-reactroot], [data-reactid]')) {
+      return { name: 'react', version: null };
+    }
+
+    // Method 5: Check any element for React fiber (broader search)
+    const anyReactElement = document.querySelector('*');
+    if (anyReactElement) {
+      // Check first few elements for React keys
+      const elements = document.querySelectorAll('body *');
+      for (let i = 0; i < Math.min(elements.length, 20); i++) {
+        const hasReactKey = Object.keys(elements[i]).some(k =>
+          k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$')
+        );
+        if (hasReactKey) {
+          return { name: 'react', version: null };
+        }
+      }
     }
 
     // Vue detection
@@ -1185,6 +1218,9 @@
     }
     if (window.__VUE__) {
       return { name: 'vue', version: '3.x' };
+    }
+    if (document.querySelector('[data-v-]') || document.querySelector('[v-cloak]')) {
+      return { name: 'vue', version: null };
     }
 
     // Angular detection
@@ -1197,21 +1233,13 @@
       }
       return { name: 'angular', version };
     }
+    if (document.querySelector('[_ngcontent-]') || document.querySelector('[ng-reflect-]')) {
+      return { name: 'angular', version: null };
+    }
 
     // Svelte detection
     if (document.querySelector('[class*="svelte-"]') || window.__svelte) {
       return { name: 'svelte', version: null };
-    }
-
-    // Check for framework indicators in DOM
-    if (document.querySelector('[data-reactroot], [data-reactid]')) {
-      return { name: 'react', version: null };
-    }
-    if (document.querySelector('[data-v-]') || document.querySelector('[v-cloak]')) {
-      return { name: 'vue', version: null };
-    }
-    if (document.querySelector('[_ngcontent-]') || document.querySelector('[ng-reflect-]')) {
-      return { name: 'angular', version: null };
     }
 
     return { name: null, version: null };

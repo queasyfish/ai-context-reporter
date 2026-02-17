@@ -524,12 +524,23 @@ async function exportSession() {
     const blob = new Blob([markdown], { type: "text/markdown" });
     const url = URL.createObjectURL(blob);
 
-    await browser.downloads.download({
+    // Safari may not support all download options
+    const downloadOptions = {
       url: url,
-      filename: filename,
-      saveAs: false,
-      conflictAction: "uniquify"
-    });
+      filename: filename
+    };
+
+    try {
+      await browser.downloads.download({
+        ...downloadOptions,
+        saveAs: false,
+        conflictAction: "uniquify"
+      });
+    } catch (optionsError) {
+      // Fallback: try with minimal options for Safari
+      console.warn("Download with full options failed, trying minimal:", optionsError);
+      await browser.downloads.download(downloadOptions);
+    }
 
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     showFeedback("Session exported to Downloads!", true);
